@@ -50,6 +50,7 @@ def command_item(args: argparse.Namespace) -> Dict[str, Any]:
             "labels": workflow.split_csv(args.labels),
             "repo": args.repo,
             "profile": args.profile,
+            "status": args.status,
             "automation_mode": args.automation_mode,
         }
     )
@@ -171,6 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     item.add_argument("--labels", default="")
     item.add_argument("--repo")
     item.add_argument("--profile")
+    item.add_argument("--status", help="Explicit Hermes Kanban column override.")
     item.add_argument("--automation-mode", choices=["manual", "semi", "auto"])
     item.set_defaults(func=command_item)
 

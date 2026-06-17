@@ -237,6 +237,173 @@ class HermesWorkflowTests(unittest.TestCase):
             self.assertEqual([item["jira_key"] for item in state["items"]], ["HER-20"])
             self.assertEqual(state["items"][0]["branch_type"], "bugfix")
 
+    def test_create_item_maps_jira_status_and_imports_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "kanban.json"
+            issue = {
+                "key": "HER-30",
+                "fields": {
+                    "summary": "Review deployment checks",
+                    "status": {"name": "In Review"},
+                    "comment": {
+                        "comments": [
+                            {
+                                "id": "10001",
+                                "author": {"displayName": "Reviewer"},
+                                "created": "2026-06-17T08:00:00.000+0000",
+                                "body": {
+                                    "type": "doc",
+                                    "content": [
+                                        {
+                                            "type": "paragraph",
+                                            "content": [{"type": "text", "text": "Check rollback notes."}],
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                },
+            }
+            with mock.patch.dict(
+                os.environ,
+                {"HERMES_KANBAN_STATE_PATH": str(state_path), "HERMES_REPO_MAP": ""},
+                clear=False,
+            ):
+                item = workflow.create_kanban_item({"jira_issue": issue})["item"]
+
+            self.assertEqual(item["status"], "Review")
+            self.assertEqual(item["jira_status"], "In Review")
+            self.assertEqual(item["comments"][0]["author"], "Reviewer")
+            self.assertIn("rollback", item["comments"][0]["body"])
+
+    def test_sync_moves_existing_item_to_current_jira_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "kanban.json"
+            base_issue = {
+                "key": "HER-31",
+                "fields": {
+                    "summary": "Build scheduler",
+                    "issuetype": {"name": "Story"},
+                    "status": {"name": "To Do"},
+                    "assignee": {"emailAddress": "dev@example.com"},
+                },
+            }
+            moved_issue = {
+                "key": "HER-31",
+                "fields": {
+                    "summary": "Build scheduler",
+                    "issuetype": {"name": "Story"},
+                    "status": {"name": "In Progress"},
+                    "assignee": {"emailAddress": "dev@example.com"},
+                },
+            }
+            with mock.patch.dict(
+                os.environ,
+                {"HERMES_KANBAN_STATE_PATH": str(state_path), "HERMES_REPO_MAP": ""},
+                clear=False,
+            ):
+                workflow.sync_assigned_kanban_items({"issues": [base_issue], "assignee": "dev@example.com"})
+                result = workflow.sync_assigned_kanban_items(
+                    {"issues": [moved_issue], "assignee": "dev@example.com"}
+                )
+                state = workflow.load_state()
+
+            self.assertEqual(result["updated"], ["HER-31"])
+            self.assertEqual(
+                result["moved"],
+                [{"key": "HER-31", "from": "Backlog", "to": "In Progress", "jira_status": "In Progress"}],
+            )
+            self.assertEqual(state["items"][0]["status"], "In Progress")
+
+    def test_active_blocker_uses_blocked_column_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "kanban.json"
+            config_path = Path(tmp) / "repos.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "project": {"key": "HER", "name": "Hermes Delivery"},
+                        "board": {
+                            "name": "Hermes Delivery Board",
+                            "columns": ["Backlog", "Blocked", "In Progress", "Done"],
+                        },
+                        "roots": [tmp],
+                        "repositories": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            issue = {
+                "key": "HER-32",
+                "fields": {
+                    "summary": "Implement guarded deploy",
+                    "status": {"name": "In Progress"},
+                    "issuelinks": [
+                        {
+                            "type": {
+                                "name": "Blocks",
+                                "inward": "is blocked by",
+                                "outward": "blocks",
+                            },
+                            "inwardIssue": {
+                                "key": "HER-29",
+                                "fields": {
+                                    "summary": "Finish release toggle",
+                                    "status": {"name": "In Progress"},
+                                },
+                            },
+                        }
+                    ],
+                },
+            }
+            with mock.patch.dict(
+                os.environ,
+                {"HERMES_KANBAN_STATE_PATH": str(state_path), "HERMES_REPO_MAP": str(config_path)},
+                clear=False,
+            ):
+                item = workflow.create_kanban_item({"jira_issue": issue})["item"]
+
+            self.assertEqual(item["status"], "Blocked")
+            self.assertTrue(item["blocked"])
+            self.assertEqual(item["dependencies"]["active_blockers"][0]["key"], "HER-29")
+
+    def test_work_packet_includes_dependencies_and_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".git").mkdir()
+            issue = {
+                "key": "HER-33",
+                "fields": {
+                    "summary": "Use ticket context",
+                    "status": {"name": "In Progress"},
+                    "comment": {
+                        "comments": [
+                            {
+                                "author": {"displayName": "Product"},
+                                "body": "Prefer the existing deployment service.",
+                            }
+                        ]
+                    },
+                    "issuelinks": [
+                        {
+                            "type": {"name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+                            "inwardIssue": {
+                                "key": "HER-28",
+                                "fields": {"summary": "Document API contract", "status": {"name": "To Do"}},
+                            },
+                        }
+                    ],
+                },
+            }
+            packet = workflow.create_work_packet(repo, issue, "feature/her-33-use-ticket-context", "default")
+            body = packet.read_text(encoding="utf-8")
+
+            self.assertIn("## Dependencies", body)
+            self.assertIn("HER-28: Document API contract", body)
+            self.assertIn("## Jira Comments", body)
+            self.assertIn("Prefer the existing deployment service.", body)
+
 
 if __name__ == "__main__":
     unittest.main()

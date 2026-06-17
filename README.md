@@ -10,6 +10,7 @@ It is intentionally Hermes-native:
 - local development uses `git` for branch, commit, and push planning
 - branch names follow Jira-derived prefixes such as `bugfix/`, `feature/`, `hotfix/`, `docs/`, `test/`, or `chore/`
 - a cron-safe sync script creates/updates Hermes Kanban tasks only for tickets assigned to a configured user/email
+- Jira sync moves Hermes Kanban items according to Jira status, imports comments, and marks active blockers from Jira issue links
 - Atlassian MCP tool auto-discovery maps available Jira MCP tools to canonical plugin actions
 - PR creation requires a configured GitHub/Bitbucket MCP tool or an explicitly approved provider CLI fallback
 
@@ -36,7 +37,7 @@ python3 scripts/ticket.py status
 1. Use Atlassian MCP to create or fetch one Jira issue in the configured project.
 2. Call `mcp_discover_tools` or `scripts/ticket.py discover-mcp` to map available Atlassian MCP tools.
 3. Call `kanban_ensure_board` to create the Hermes project and Kanban board.
-4. Call `kanban_create_item` with the Jira issue JSON.
+4. Call `kanban_create_item` with the Jira issue JSON; the item is placed by Jira status and enriched with comments/dependencies.
 5. Assign a Hermes profile with `kanban_assign_profile`.
 6. Resolve the local repo with `repository_resolve`.
 7. Start a git branch with `work_start_branch`.
@@ -65,6 +66,10 @@ python3 scripts/jira_cron_sync.py \
 ```
 
 See `config/cron.example` for a crontab template.
+
+Cron sync keeps the Hermes Kanban board aligned with assigned Jira work. Imported issues move to the configured column for their Jira status, carry recent Jira comments into item context, and include dependency metadata from Jira issue links. If an issue has active blockers and the board defines a `Blocked` column, the item moves there until the blockers clear.
+
+Configure Jira-status-to-column behavior in `HERMES_REPO_MAP` with `statusColumns`; see `config/repositories.example.json` and `docs/configuration.md`.
 
 ## Validation
 

@@ -14,6 +14,23 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 
 DEFAULT_COLUMNS = ["Backlog", "Ready", "In Progress", "Review", "Done"]
+DEFAULT_STATUS_COLUMN_MAP = {
+    "Open": "Backlog",
+    "To Do": "Backlog",
+    "Todo": "Backlog",
+    "Backlog": "Backlog",
+    "Selected for Development": "Ready",
+    "Ready": "Ready",
+    "In Progress": "In Progress",
+    "Doing": "In Progress",
+    "Code Review": "Review",
+    "In Review": "Review",
+    "Review": "Review",
+    "Done": "Done",
+    "Closed": "Done",
+    "Resolved": "Done",
+}
+DEFAULT_BLOCKED_COLUMN = "Blocked"
 DEFAULT_TOOL_PREFIXES = {
     "github": ["github_create_pull_request", "create_pull_request", "github_pr_create"],
     "bitbucket": ["bitbucket_create_pull_request", "create_pull_request", "bitbucket_pr_create"],
@@ -475,6 +492,277 @@ def issue_description_text(issue: Optional[Dict[str, Any]], fallback: str = "") 
     return flatten_adf(fields.get("description")) or str(issue.get("description") or fallback or "")
 
 
+def actor_name(actor: Any) -> str:
+    if isinstance(actor, dict):
+        for key in ("displayName", "emailAddress", "email", "name", "accountId", "key"):
+            if actor.get(key):
+                return str(actor[key])
+    if actor:
+        return str(actor)
+    return "Unknown"
+
+
+def raw_comment_collection(issue: Optional[Dict[str, Any]]) -> List[Any]:
+    if not issue:
+        return []
+    fields = issue_fields(issue)
+    candidates = [
+        issue.get("comments"),
+        issue.get("comment"),
+        fields.get("comment"),
+        fields.get("comments"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            comments = candidate.get("comments") or candidate.get("values") or candidate.get("results")
+            if isinstance(comments, list):
+                return comments
+        if isinstance(candidate, list):
+            return candidate
+    return []
+
+
+def jira_comments(issue: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    comments: List[Dict[str, str]] = []
+    for raw in raw_comment_collection(issue):
+        if isinstance(raw, str):
+            body = raw.strip()
+            if body:
+                comments.append({"author": "Unknown", "body": body})
+            continue
+        if not isinstance(raw, dict):
+            continue
+        body = (
+            flatten_adf(raw.get("renderedBody"))
+            or flatten_adf(raw.get("body"))
+            or flatten_adf(raw.get("text"))
+        ).strip()
+        if not body:
+            continue
+        comment: Dict[str, str] = {
+            "author": actor_name(raw.get("author") or raw.get("updateAuthor")),
+            "body": body,
+        }
+        for key in ("id", "created", "updated"):
+            if raw.get(key):
+                comment[key] = str(raw[key])
+        comments.append(comment)
+    return comments
+
+
+def issue_status_category_name(issue: Optional[Dict[str, Any]]) -> str:
+    status = issue_fields(issue).get("status") if issue else None
+    if not isinstance(status, dict):
+        status = issue.get("status") if issue else None
+    if isinstance(status, dict):
+        category = status.get("statusCategory") or status.get("category")
+        if isinstance(category, dict):
+            return str(category.get("name") or category.get("key") or "")
+        if category:
+            return str(category)
+    return ""
+
+
+def issue_is_done(issue: Optional[Dict[str, Any]]) -> bool:
+    values = normalize_values([issue_status_name(issue), issue_status_category_name(issue)])
+    return bool(values & normalize_values(["Done", "Closed", "Resolved"]))
+
+
+def linked_issue_summary(raw_issue: Any) -> Dict[str, Any]:
+    if isinstance(raw_issue, str):
+        return {"key": raw_issue, "summary": raw_issue, "status": "", "done": False}
+    if not isinstance(raw_issue, dict):
+        return {"key": "", "summary": str(raw_issue), "status": "", "done": False}
+    key = issue_key(raw_issue, "")
+    status = issue_status_name(raw_issue)
+    payload: Dict[str, Any] = {
+        "key": key,
+        "summary": issue_summary(raw_issue, key or "Linked Jira issue"),
+        "status": status,
+        "done": issue_is_done(raw_issue),
+    }
+    url = issue_url(raw_issue)
+    if url:
+        payload["url"] = url
+    return payload
+
+
+def append_linked_issue(target: List[Dict[str, Any]], raw_issue: Any) -> None:
+    payload = linked_issue_summary(raw_issue)
+    key = payload.get("key")
+    if key and any(item.get("key") == key for item in target):
+        return
+    target.append(payload)
+
+
+def relation_means_blocked_by(relation: str, type_name: str = "") -> bool:
+    value = f"{relation} {type_name}".casefold()
+    return any(phrase in value for phrase in ("blocked by", "depends on", "dependent on", "requires"))
+
+
+def relation_means_blocks(relation: str, type_name: str = "") -> bool:
+    value = f"{relation} {type_name}".casefold()
+    return "blocks" in value or "depended on by" in value or "required by" in value
+
+
+def raw_issue_links(issue: Optional[Dict[str, Any]]) -> List[Any]:
+    if not issue:
+        return []
+    fields = issue_fields(issue)
+    links: List[Any] = []
+    for key in ("issuelinks", "issueLinks", "links"):
+        value = fields.get(key) if key in fields else issue.get(key)
+        if isinstance(value, list):
+            links.extend(value)
+    return links
+
+
+def raw_dependency_list(issue: Optional[Dict[str, Any]], keys: Iterable[str]) -> List[Any]:
+    if not issue:
+        return []
+    fields = issue_fields(issue)
+    values: List[Any] = []
+    for key in keys:
+        candidate = issue.get(key)
+        if candidate is None:
+            candidate = fields.get(key)
+        if isinstance(candidate, dict) and "issues" in candidate:
+            candidate = candidate["issues"]
+        if isinstance(candidate, list):
+            values.extend(candidate)
+        elif candidate:
+            values.append(candidate)
+    return values
+
+
+def normalize_existing_dependencies(raw: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {"blocked_by": [], "blocks": [], "active_blockers": [], "has_blockers": False}
+    blocked_by = [linked_issue_summary(item) for item in raw.get("blocked_by") or raw.get("blockedBy") or []]
+    blocks = [linked_issue_summary(item) for item in raw.get("blocks") or []]
+    active_blockers = [item for item in blocked_by if not item.get("done")]
+    if raw.get("active_blockers"):
+        active_blockers = [linked_issue_summary(item) for item in raw["active_blockers"]]
+    return {
+        "blocked_by": blocked_by,
+        "blocks": blocks,
+        "active_blockers": active_blockers,
+        "has_blockers": bool(active_blockers or raw.get("has_blockers")),
+    }
+
+
+def jira_dependencies(issue: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    existing = issue.get("dependencies") if issue else None
+    if isinstance(existing, dict) and any(key in existing for key in ("blocked_by", "blockedBy", "blocks")):
+        return normalize_existing_dependencies(existing)
+
+    blocked_by: List[Dict[str, Any]] = []
+    blocks: List[Dict[str, Any]] = []
+    for link in raw_issue_links(issue):
+        if not isinstance(link, dict):
+            continue
+        link_type = link.get("type") or {}
+        type_name = str(link_type.get("name") or "") if isinstance(link_type, dict) else str(link_type)
+        inward_relation = str(link_type.get("inward") or "") if isinstance(link_type, dict) else ""
+        outward_relation = str(link_type.get("outward") or "") if isinstance(link_type, dict) else ""
+
+        inward_issue = link.get("inwardIssue") or link.get("inward")
+        if inward_issue:
+            if relation_means_blocked_by(inward_relation, type_name) or type_name.casefold() == "blocks":
+                append_linked_issue(blocked_by, inward_issue)
+            elif relation_means_blocks(inward_relation, type_name):
+                append_linked_issue(blocks, inward_issue)
+
+        outward_issue = link.get("outwardIssue") or link.get("outward")
+        if outward_issue:
+            if relation_means_blocked_by(outward_relation, type_name):
+                append_linked_issue(blocked_by, outward_issue)
+            elif relation_means_blocks(outward_relation, type_name) or type_name.casefold() == "blocks":
+                append_linked_issue(blocks, outward_issue)
+
+    for raw in raw_dependency_list(issue, ("blockedBy", "blocked_by", "dependsOn", "dependencies")):
+        append_linked_issue(blocked_by, raw)
+    for raw in raw_dependency_list(issue, ("blocks", "blocking")):
+        append_linked_issue(blocks, raw)
+
+    active_blockers = [item for item in blocked_by if not item.get("done")]
+    return {
+        "blocked_by": blocked_by,
+        "blocks": blocks,
+        "active_blockers": active_blockers,
+        "has_blockers": bool(active_blockers),
+    }
+
+
+def normalized_status_key(status: str) -> List[str]:
+    return [status.strip().casefold(), slugify(status).casefold()]
+
+
+def board_column_named(columns: List[str], name: Optional[str]) -> Optional[str]:
+    if not name:
+        return None
+    for column in columns:
+        if column.casefold() == str(name).casefold():
+            return column
+    return None
+
+
+def status_column_map(config: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    config = config or load_config()
+    board = config.get("board") or {}
+    raw_configured = (
+        config.get("statusColumns")
+        or board.get("statusColumns")
+        or config.get("status_columns")
+        or board.get("status_columns")
+        or {}
+    )
+    mapping: Dict[str, str] = {}
+
+    def add(status: Any, column: Any) -> None:
+        if not status or not column:
+            return
+        for key in normalized_status_key(str(status)):
+            mapping[key] = str(column)
+
+    for status, column in DEFAULT_STATUS_COLUMN_MAP.items():
+        add(status, column)
+    if isinstance(raw_configured, dict):
+        for raw_status, raw_column in raw_configured.items():
+            if isinstance(raw_column, list):
+                for status in raw_column:
+                    add(status, raw_status)
+            else:
+                add(raw_status, raw_column)
+    return mapping
+
+
+def kanban_column_for_issue(
+    issue: Optional[Dict[str, Any]],
+    columns: List[str],
+    config: Optional[Dict[str, Any]] = None,
+    fallback: Optional[str] = None,
+) -> str:
+    config = config or load_config()
+    fallback_column = board_column_named(columns, fallback) or columns[0]
+    status = issue_status_name(issue)
+    mapped_column = None
+    for key in normalized_status_key(status):
+        mapped_column = status_column_map(config).get(key)
+        if mapped_column:
+            break
+    column = board_column_named(columns, mapped_column) or fallback_column
+    blocked_column = board_column_named(
+        columns,
+        (config.get("board") or {}).get("blockedColumn")
+        or config.get("blockedColumn")
+        or DEFAULT_BLOCKED_COLUMN,
+    )
+    if blocked_column and not issue_is_done(issue) and jira_dependencies(issue).get("has_blockers"):
+        return blocked_column
+    return column
+
+
 def custom_field_value(issue: Dict[str, Any], configured_name: Optional[str]) -> Any:
     if not configured_name:
         return None
@@ -706,6 +994,7 @@ def find_item(state: Dict[str, Any], item_id: Optional[str] = None, jira_key: Op
 
 def create_kanban_item(args: Dict[str, Any]) -> Dict[str, Any]:
     ensure_board({})
+    config = load_config()
     state = load_state()
     jira_issue = args.get("jira_issue") or {}
     key = args.get("jira_key") or issue_key(jira_issue)
@@ -715,6 +1004,25 @@ def create_kanban_item(args: Dict[str, Any]) -> Dict[str, Any]:
     description = args.get("description") or issue_description_text(jira_issue)
     labels = args.get("labels") or issue_fields(jira_issue).get("labels") or []
     hints = repo_hints_from_issue(jira_issue, args.get("repo"), description, labels)
+    existing = next(
+        (old for old in state.get("items", []) if old.get("id") == item_id_from_key(key)),
+        None,
+    )
+    columns = state["board"]["columns"]
+    explicit_status = args.get("status")
+    if explicit_status:
+        status = board_column_named(columns, explicit_status)
+        if not status:
+            raise WorkflowError(f"status must match a Hermes Kanban column: {', '.join(columns)}")
+    else:
+        status = kanban_column_for_issue(
+            jira_issue,
+            columns,
+            config,
+            fallback=existing.get("status") if existing else None,
+        )
+    dependencies = jira_dependencies(jira_issue)
+    comments = jira_comments(jira_issue)
     item = {
         "id": item_id_from_key(key),
         "jira_key": key,
@@ -724,17 +1032,28 @@ def create_kanban_item(args: Dict[str, Any]) -> Dict[str, Any]:
         "labels": labels,
         "repo_hints": hints,
         "profile": args.get("profile"),
-        "status": state["board"]["columns"][0],
+        "status": status,
+        "jira_status": issue_status_name(jira_issue),
+        "blocked": bool(dependencies.get("has_blockers")),
+        "dependencies": dependencies,
+        "comments": comments,
         "automation_mode": automation_mode(args),
-        "branch_type": branch_type_for_issue(jira_issue),
+        "branch_type": branch_type_for_issue(jira_issue, config),
         "created_at": utc_now(),
         "updated_at": utc_now(),
     }
-    existing = next((old for old in state.get("items", []) if old.get("id") == item["id"]), None)
     if existing:
         item["created_at"] = existing.get("created_at", item["created_at"])
-        item["status"] = existing.get("status") or item["status"]
         item["profile"] = item["profile"] or existing.get("profile")
+        if not item["jira_status"]:
+            item["jira_status"] = existing.get("jira_status", "")
+        if not comments and existing.get("comments"):
+            item["comments"] = existing["comments"]
+        if not dependencies.get("blocked_by") and not dependencies.get("blocks") and existing.get("dependencies"):
+            item["dependencies"] = normalize_existing_dependencies(existing["dependencies"])
+            item["blocked"] = bool(item["dependencies"].get("has_blockers"))
+        if not jira_issue and existing.get("branch_type"):
+            item["branch_type"] = existing["branch_type"]
     items = [old for old in state.get("items", []) if old.get("id") != item["id"]]
     items.append(item)
     state["items"] = items
@@ -775,8 +1094,16 @@ def sync_assigned_kanban_items(args: Dict[str, Any]) -> Dict[str, Any]:
 
     created: List[str] = []
     updated: List[str] = []
+    moved: List[Dict[str, str]] = []
+    blocked: List[str] = []
     skipped: List[Dict[str, str]] = []
-    existing_keys = {item.get("jira_key") for item in load_state().get("items", [])}
+    existing_state = load_state()
+    existing_keys = {item.get("jira_key") for item in existing_state.get("items", [])}
+    existing_statuses = {
+        item.get("jira_key"): item.get("status")
+        for item in existing_state.get("items", [])
+        if item.get("jira_key")
+    }
 
     for issue in issues:
         key = issue_key(issue)
@@ -786,13 +1113,26 @@ def sync_assigned_kanban_items(args: Dict[str, Any]) -> Dict[str, Any]:
         if not assignee_matches(issue, assignee):
             skipped.append({"key": key, "reason": "assignee did not match"})
             continue
-        create_kanban_item(
+        created_item = create_kanban_item(
             {
                 "jira_issue": issue,
                 "profile": args.get("profile") or env("HERMES_PROFILE", "default"),
                 "automation_mode": args.get("automation_mode"),
             }
-        )
+        )["item"]
+        previous_status = existing_statuses.get(key)
+        if previous_status and previous_status != created_item.get("status"):
+            moved.append(
+                {
+                    "key": key,
+                    "from": str(previous_status),
+                    "to": str(created_item.get("status")),
+                    "jira_status": str(created_item.get("jira_status") or ""),
+                }
+            )
+        existing_statuses[key] = created_item.get("status")
+        if created_item.get("blocked"):
+            blocked.append(key)
         if key in existing_keys:
             updated.append(key)
         else:
@@ -806,6 +1146,8 @@ def sync_assigned_kanban_items(args: Dict[str, Any]) -> Dict[str, Any]:
         "assignee": assignee,
         "created": created,
         "updated": updated,
+        "moved": moved,
+        "blocked": blocked,
         "skipped": skipped,
         "state_path": str(state_path()),
     }
@@ -841,10 +1183,14 @@ def issue_from_args_or_item(args: Dict[str, Any]) -> Dict[str, Any]:
         "key": item.get("jira_key"),
         "summary": item.get("summary"),
         "description": item.get("description"),
+        "jira_url": item.get("jira_url"),
+        "comments": item.get("comments") or [],
+        "dependencies": item.get("dependencies") or {},
         "fields": {
             "summary": item.get("summary"),
             "labels": item.get("labels") or [],
             "description": item.get("description"),
+            "status": {"name": item.get("jira_status") or item.get("status") or ""},
         },
         "browseUrl": item.get("jira_url"),
     }
@@ -894,6 +1240,50 @@ def ensure_clean_worktree(repo: Path, allow_dirty: bool) -> None:
         )
 
 
+def format_linked_issue(item: Dict[str, Any]) -> str:
+    key = item.get("key") or "unknown"
+    summary = item.get("summary") or key
+    status = item.get("status") or "unknown status"
+    suffix = " done" if item.get("done") else ""
+    return f"{key}: {summary} ({status}{suffix})"
+
+
+def format_dependency_context(dependencies: Dict[str, Any]) -> str:
+    if not isinstance(dependencies, dict):
+        return "- No dependencies detected"
+    lines: List[str] = []
+    active_blockers = dependencies.get("active_blockers") or []
+    blocked_by = dependencies.get("blocked_by") or []
+    blocks = dependencies.get("blocks") or []
+    if active_blockers:
+        lines.append("Active blockers:")
+        lines.extend(f"- {format_linked_issue(item)}" for item in active_blockers)
+    if blocked_by:
+        if lines:
+            lines.append("")
+        lines.append("Blocked by:")
+        lines.extend(f"- {format_linked_issue(item)}" for item in blocked_by)
+    if blocks:
+        if lines:
+            lines.append("")
+        lines.append("Blocks:")
+        lines.extend(f"- {format_linked_issue(item)}" for item in blocks)
+    return "\n".join(lines) if lines else "- No dependencies detected"
+
+
+def format_comment_context(comments: List[Dict[str, str]]) -> str:
+    if not comments:
+        return "- No Jira comments found"
+    lines: List[str] = []
+    for comment in comments:
+        timestamp = comment.get("updated") or comment.get("created") or "undated"
+        author = comment.get("author") or "Unknown"
+        lines.append(f"- {timestamp} by {author}:")
+        body_lines = (comment.get("body") or "").splitlines() or [""]
+        lines.extend(f"  {line}" for line in body_lines)
+    return "\n".join(lines)
+
+
 def create_work_packet(repo: Path, issue: Dict[str, Any], branch: str, profile_name: Optional[str]) -> Path:
     key = issue_key(issue, "JIRA")
     packet_dir = repo / ".hermes" / "work"
@@ -901,11 +1291,22 @@ def create_work_packet(repo: Path, issue: Dict[str, Any], branch: str, profile_n
     packet = packet_dir / f"{key}.md"
     guidance = find_repo_guidance(repo)
     guidance_lines = "\n".join(f"- {path.relative_to(repo)}" for path in guidance) or "- None found"
+    dependencies = jira_dependencies(issue)
+    comments = jira_comments(issue)
     body = f"""# {key}: {issue_summary(issue)}
 
 Jira: {issue_url(issue, key)}
 Branch: {branch}
 Hermes profile: {profile_name or env("HERMES_PROFILE", "default")}
+Jira status: {issue_status_name(issue) or "Unknown"}
+
+## Dependencies
+
+{format_dependency_context(dependencies)}
+
+## Jira Comments
+
+{format_comment_context(comments)}
 
 ## Repository Guidance
 
@@ -915,12 +1316,14 @@ Read these files before editing:
 ## Work Instructions
 
 1. Use the official Atlassian Jira MCP issue details as source of truth.
-2. Read repository guidance before editing.
-3. Inspect the existing implementation and tests.
-4. Make the requested change with the smallest reasonable scope.
-5. Run relevant checks.
-6. Commit only intended changes.
-7. Wait for user review before PR creation.
+2. Check dependencies and blockers before changing code.
+3. Read Jira comments for clarifications and acceptance notes.
+4. Read repository guidance before editing.
+5. Inspect the existing implementation and tests.
+6. Make the requested change with the smallest reasonable scope.
+7. Run relevant checks.
+8. Commit only intended changes.
+9. Wait for user review before PR creation.
 """
     packet.write_text(body, encoding="utf-8")
     return packet

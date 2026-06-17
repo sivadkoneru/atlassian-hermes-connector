@@ -9,8 +9,39 @@
       "Backlog",
       "Ready",
       "In Progress",
+      "Blocked",
       "Review",
       "Done"
+    ]
+  },
+  "statusColumns": {
+    "Backlog": [
+      "Backlog",
+      "To Do",
+      "Open"
+    ],
+    "Ready": [
+      "Selected for Development",
+      "Ready"
+    ],
+    "In Progress": [
+      "In Progress",
+      "Implementing"
+    ],
+    "Blocked": [
+      "Blocked",
+      "Waiting",
+      "On Hold"
+    ],
+    "Review": [
+      "Code Review",
+      "In Review",
+      "Review"
+    ],
+    "Done": [
+      "Done",
+      "Resolved",
+      "Closed"
     ]
   },
   "roots": [

@@ -32,6 +32,8 @@ python3 scripts/ticket.py item \
 
 The Hermes Kanban board is local plugin state. It mirrors the work queue that Hermes should operate on, while Jira remains the source of truth for ticket content.
 
+Jira sync keeps the board placement current. Each imported issue is moved to the Hermes column mapped from Jira status in `statusColumns`; active blockers from Jira issue links mark the item blocked, and a board with a `Blocked` column uses that column while the blocker is active.
+
 Assign the Hermes profile that owns implementation, deployment hand-off, and follow-up process:
 
 ```bash
@@ -62,7 +64,7 @@ Branch prefixes come from Jira issue type, priority, and labels. Examples:
 - hotfix or critical incident: `hotfix/her-125-restore-webhook`
 - docs label: `docs/her-126-update-runbook`
 
-The command creates `.hermes/work/<ISSUE_KEY>.md` in the target repo. Treat this file as the handoff between Jira, Hermes Kanban, and implementation.
+The command creates `.hermes/work/<ISSUE_KEY>.md` in the target repo. Treat this file as the handoff between Jira, Hermes Kanban, and implementation. The packet includes imported Jira comments and dependency/blocker context so ticket discussion and upstream constraints are visible before code changes begin.
 
 Before editing code, read these files in the target repository when present:
 
@@ -117,5 +119,7 @@ python3 scripts/jira_cron_sync.py \
   --assignee you@example.com \
   --profile default
 ```
+
+The sync updates existing cards as well as creating new ones. It moves cards according to Jira status, imports Jira comments into item context, detects dependencies and blockers from Jira issue links, and marks blocked items. If the Hermes board has a `Blocked` column, actively blocked work moves there.
 
 See `config/cron.example` for a crontab template. Keep the Jira query/export step backed by the official Atlassian MCP server configured in Hermes.

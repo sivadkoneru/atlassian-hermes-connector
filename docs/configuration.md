@@ -112,6 +112,28 @@ Point `HERMES_REPO_MAP` to a private JSON file. The public example shows all sup
 }
 ```
 
+## Status Columns
+
+`statusColumns` defines which Jira status names belong in each Hermes Kanban column. Keep the board columns and status mapping in the same `HERMES_REPO_MAP` file so cron sync can move items without hardcoded workflow rules:
+
+```json
+{
+  "board": {
+    "columns": ["Backlog", "Ready", "In Progress", "Blocked", "Review", "Done"]
+  },
+  "statusColumns": {
+    "Backlog": ["Backlog", "To Do", "Open"],
+    "Ready": ["Selected for Development", "Ready"],
+    "In Progress": ["In Progress", "Implementing"],
+    "Blocked": ["Blocked", "Waiting", "On Hold"],
+    "Review": ["Code Review", "In Review", "Review"],
+    "Done": ["Done", "Resolved", "Closed"]
+  }
+}
+```
+
+When a Jira issue has active blockers from issue links, the item is marked blocked. If the board includes a `Blocked` column, blocked items move there; otherwise they remain in the column selected from Jira status and keep the blocked flag in item context.
+
 ## Repository Resolution Order
 
 Repository selection considers all options:
@@ -186,3 +208,5 @@ python3 scripts/jira_cron_sync.py \
 ```
 
 Install a crontab from `config/cron.example` only after replacing `HERMES_PLUGIN_DIR`, `HERMES_JIRA_ASSIGNEE`, and the Hermes MCP prompt/command for your environment.
+
+During sync, imported Jira comments and dependency/blocker links are stored with the Hermes Kanban item and included in generated work packets. This gives the assigned Hermes profile the latest ticket discussion and unblock criteria before branch work starts.

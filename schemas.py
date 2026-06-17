@@ -21,7 +21,8 @@ KANBAN_CREATE_ITEM = {
     "name": "kanban_create_item",
     "description": (
         "Create a Hermes Kanban item from Jira MCP data. Accepts Jira issue JSON, "
-        "explicit repo tags, description text, and automation mode."
+        "explicit repo tags, description text, automation mode, Jira status, "
+        "dependencies, and comments."
     ),
     "parameters": {
         "type": "object",
@@ -34,6 +35,7 @@ KANBAN_CREATE_ITEM = {
             "labels": {"type": "array", "items": {"type": "string"}},
             "repo": {"type": "string", "description": "Explicit repository override."},
             "profile": {"type": "string", "description": "Hermes profile to assign."},
+            "status": {"type": "string", "description": "Optional explicit Hermes Kanban column override."},
             "automation_mode": {"type": "string", "enum": ["manual", "semi", "auto"]},
         },
     },
@@ -59,7 +61,8 @@ KANBAN_SYNC_ASSIGNED = {
     "description": (
         "Create or update Hermes Kanban items from Jira issues fetched through "
         "official Atlassian MCP, importing only issues assigned to the configured "
-        "username, email, display name, or account id."
+        "username, email, display name, or account id. Jira status moves cards, "
+        "comments are imported, and dependency blockers are tracked."
     ),
     "parameters": {
         "type": "object",

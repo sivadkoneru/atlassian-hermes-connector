@@ -63,6 +63,10 @@ Kanban state is stored at `HERMES_KANBAN_STATE_PATH`:
 
 Each item stores Jira key, Jira URL, summary, description, repository hints, assigned Hermes profile, status, and automation mode.
 
+Status is synchronized from Jira through the configurable `statusColumns` map in `HERMES_REPO_MAP`. Sync updates move existing Hermes Kanban items when Jira transitions, instead of treating the Hermes board as a separate status source.
+
+Items can also store imported Jira comments and dependency context from Jira issue links. Active blockers mark the item blocked; when the board declares a `Blocked` column, blocked work is placed there until dependencies clear. Generated work packets include the same comments and dependency context for implementation.
+
 ## Branch Naming
 
 Branch naming is deterministic and Jira-aware:
@@ -81,4 +85,5 @@ The branch type is selected from explicit branch labels, Jira issue type, labels
 - Separate git from PR providers. `git` handles branch, commit, and push; PR creation requires provider MCP or explicit CLI fallback.
 - Require human review before PR creation by default.
 - Sync only assigned Jira work. The cron importer refuses to create/update items unless the Jira assignee matches the configured username/email/account id.
+- Keep Jira context attached to local work. Comments, status, and blockers travel from Jira into Hermes Kanban and generated work packets.
 - Keep secrets out of the repository. `.env.example` contains placeholders only.
