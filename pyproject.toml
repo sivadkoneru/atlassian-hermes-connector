@@ -1,0 +1,22 @@
+[project]
+name = "atlassian-hermes-connector"
+version = "0.2.0"
+description = "Hermes plugin for Jira MCP, Kanban profiles, local git workflows, and reviewed GitHub or Bitbucket pull requests."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [
+  { name = "Siva Koneru" }
+]
+keywords = [
+  "hermes",
+  "jira",
+  "mcp",
+  "github",
+  "bitbucket",
+  "kanban"
+]
+
+[tool.hermes]
+plugin = "atlassian-hermes-connector"
+default_development_root = "~/Development"

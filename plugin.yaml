@@ -1,0 +1,22 @@
+name: atlassian-hermes-connector
+version: 0.2.0
+description: Hermes Kanban and git workflow connector for Jira work sourced through Atlassian MCP.
+author: Siva Koneru
+provides_tools:
+  - kanban_ensure_board
+  - kanban_create_item
+  - kanban_assign_profile
+  - repository_resolve
+  - work_start_branch
+  - work_commit
+  - pr_plan
+  - provider_status
+provides_hooks:
+  - post_tool_call
+requires_env:
+  - name: HERMES_PROJECT_KEY
+    description: Single Jira/Hermes project key this plugin manages.
+  - name: HERMES_KANBAN_BOARD
+    description: Single Hermes Kanban board name this plugin creates and maintains.
+  - name: HERMES_DEVELOPMENT_ROOT
+    description: Local directory where repositories are discovered.

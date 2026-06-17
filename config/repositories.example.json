@@ -1,0 +1,54 @@
+{
+  "roots": [
+    "~/Development"
+  ],
+  "profiles": {
+    "default": {
+      "displayName": "Primary Developer",
+      "jiraAccountId": "replace-with-jira-account-id",
+      "githubOwner": "replace-with-github-owner",
+      "bitbucketWorkspace": "replace-with-bitbucket-workspace"
+    }
+  },
+  "repositories": [
+    {
+      "name": "my-buddy-service",
+      "path": "~/Development/my-buddy-service",
+      "provider": "github",
+      "aliases": [
+        "my-buddy",
+        "buddy-service"
+      ],
+      "jira": {
+        "projects": [
+          "BUD"
+        ],
+        "components": [
+          "backend"
+        ],
+        "labels": [
+          "repo:my-buddy-service"
+        ]
+      }
+    },
+    {
+      "name": "sang-team-hermes",
+      "path": "~/Development/sang-team-hermes",
+      "provider": "bitbucket",
+      "aliases": [
+        "hermes"
+      ],
+      "jira": {
+        "projects": [
+          "HER"
+        ],
+        "components": [
+          "automation"
+        ],
+        "labels": [
+          "repo:sang-team-hermes"
+        ]
+      }
+    }
+  ]
+}
