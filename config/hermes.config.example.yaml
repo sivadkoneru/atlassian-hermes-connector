@@ -1,0 +1,26 @@
+# Merge this into ~/.hermes/config.yaml.
+# Fill ATLASSIAN_MCP_URL from official Atlassian/Rovo MCP documentation or admin setup.
+
+plugins:
+  enabled:
+    - atlassian-hermes-connector
+
+mcp_servers:
+  atlassian:
+    url: "${ATLASSIAN_MCP_URL}"
+    auth: oauth
+    oauth:
+      client_id: "${ATLASSIAN_MCP_OAUTH_CLIENT_ID}"
+      client_secret: "${ATLASSIAN_MCP_OAUTH_CLIENT_SECRET}"
+    tools:
+      prompts: false
+      resources: false
+
+  github:
+    # Prefer Hermes' GitHub MCP catalog entry or your organization's configured server.
+    # Hermes registers tools as mcp_github_<tool_name>.
+    enabled: false
+
+  bitbucket:
+    # Prefer a Bitbucket MCP server when available. Use bb only as an approved fallback.
+    enabled: false
