@@ -52,6 +52,37 @@ class HermesWorkflowTests(unittest.TestCase):
         issue = {"fields": {"labels": [], "description": "Repository: description-service"}}
         self.assertEqual(workflow.repo_hint_from_issue(issue), "description-service")
 
+    def test_branch_name_uses_jira_issue_type(self) -> None:
+        bug = {
+            "key": "HER-10",
+            "fields": {
+                "summary": "Fix login redirect",
+                "issuetype": {"name": "Bug"},
+                "labels": [],
+            },
+        }
+        story = {
+            "key": "HER-11",
+            "fields": {
+                "summary": "Add dashboard",
+                "issuetype": {"name": "Story"},
+                "labels": [],
+            },
+        }
+        self.assertEqual(workflow.branch_name_for_issue(bug), "bugfix/her-10-fix-login-redirect")
+        self.assertEqual(workflow.branch_name_for_issue(story), "feature/her-11-add-dashboard")
+
+    def test_branch_label_override_wins(self) -> None:
+        issue = {
+            "key": "HER-12",
+            "fields": {
+                "summary": "Update runbook",
+                "issuetype": {"name": "Task"},
+                "labels": ["branch:docs"],
+            },
+        }
+        self.assertEqual(workflow.branch_name_for_issue(issue), "docs/her-12-update-runbook")
+
     def test_resolve_repository_from_configured_label(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "service"
@@ -140,6 +171,39 @@ class HermesWorkflowTests(unittest.TestCase):
         result = json.loads(tools.provider_status({}))
         self.assertTrue(result["success"])
         self.assertIn("atlassian_mcp", result)
+
+    def test_sync_assigned_issues_filters_by_email(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "kanban.json"
+            issues = [
+                {
+                    "key": "HER-20",
+                    "fields": {
+                        "summary": "Assigned work",
+                        "issuetype": {"name": "Bug"},
+                        "labels": ["repo:service"],
+                        "assignee": {"emailAddress": "dev@example.com", "displayName": "Dev User"},
+                    },
+                },
+                {
+                    "key": "HER-21",
+                    "fields": {
+                        "summary": "Someone else",
+                        "issuetype": {"name": "Story"},
+                        "labels": ["repo:service"],
+                        "assignee": {"emailAddress": "other@example.com", "displayName": "Other User"},
+                    },
+                },
+            ]
+            with mock.patch.dict(os.environ, {"HERMES_KANBAN_STATE_PATH": str(state_path)}, clear=False):
+                result = workflow.sync_assigned_kanban_items(
+                    {"issues": issues, "assignee": "dev@example.com", "profile": "default"}
+                )
+                state = workflow.load_state()
+            self.assertEqual(result["created"], ["HER-20"])
+            self.assertEqual(result["skipped"], [{"key": "HER-21", "reason": "assignee did not match"}])
+            self.assertEqual([item["jira_key"] for item in state["items"]], ["HER-20"])
+            self.assertEqual(state["items"][0]["branch_type"], "bugfix")
 
 
 if __name__ == "__main__":

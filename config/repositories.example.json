@@ -49,6 +49,59 @@
       "pullRequest": "reviewed-only"
     }
   },
+  "branchTypes": {
+    "hotfix": {
+      "issue_types": [
+        "Incident",
+        "Hotfix"
+      ],
+      "labels": [
+        "hotfix",
+        "urgent",
+        "p0",
+        "p1"
+      ],
+      "priorities": [
+        "Highest",
+        "Critical",
+        "Blocker"
+      ]
+    },
+    "bugfix": {
+      "issue_types": [
+        "Bug",
+        "Defect"
+      ],
+      "labels": [
+        "bug",
+        "bugfix"
+      ]
+    },
+    "feature": {
+      "issue_types": [
+        "Story",
+        "Feature",
+        "New Feature",
+        "Epic"
+      ],
+      "labels": [
+        "feature",
+        "enhancement"
+      ]
+    },
+    "chore": {
+      "issue_types": [
+        "Task",
+        "Sub-task",
+        "Maintenance"
+      ],
+      "labels": [
+        "chore",
+        "maintenance",
+        "refactor"
+      ]
+    }
+  },
   "repositories": [
     {
       "name": "my-buddy-service",

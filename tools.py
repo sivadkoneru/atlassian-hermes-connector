@@ -35,6 +35,11 @@ def kanban_assign_profile(args: Dict[str, Any], **kwargs) -> str:
     return _wrap(workflow.assign_profile, args)
 
 
+def kanban_sync_assigned(args: Dict[str, Any], **kwargs) -> str:
+    del kwargs
+    return _wrap(workflow.sync_assigned_kanban_items, args)
+
+
 def repository_resolve(args: Dict[str, Any], **kwargs) -> str:
     del kwargs
     return _wrap(workflow.resolve_repository_payload, args)

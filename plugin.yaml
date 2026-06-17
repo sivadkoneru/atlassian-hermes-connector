@@ -6,6 +6,7 @@ provides_tools:
   - kanban_ensure_board
   - kanban_create_item
   - kanban_assign_profile
+  - kanban_sync_assigned
   - repository_resolve
   - work_start_branch
   - work_commit
@@ -20,3 +21,5 @@ requires_env:
     description: Single Hermes Kanban board name this plugin creates and maintains.
   - name: HERMES_DEVELOPMENT_ROOT
     description: Local directory where repositories are discovered.
+  - name: HERMES_JIRA_ASSIGNEE
+    description: Jira assignee username, email, display name, or account id used by cron sync.

@@ -87,6 +87,7 @@ def command_start(args: argparse.Namespace) -> Dict[str, Any]:
             "jira_key": args.jira_key,
             "repo": args.repo,
             "branch": args.branch,
+            "branch_prefix": args.branch_prefix,
             "automation_mode": args.automation_mode,
             "confirm_branch": args.confirm_branch,
             "allow_dirty": args.allow_dirty,
@@ -125,6 +126,18 @@ def command_pr(args: argparse.Namespace) -> Dict[str, Any]:
 
 def command_status(_args: argparse.Namespace) -> Dict[str, Any]:
     return workflow.provider_status()
+
+
+def command_sync(args: argparse.Namespace) -> Dict[str, Any]:
+    issues = load_issue_arg(args.issues_json)
+    return workflow.sync_assigned_kanban_items(
+        {
+            "issues": issues,
+            "assignee": args.assignee,
+            "profile": args.profile,
+            "automation_mode": args.automation_mode,
+        }
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -170,6 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--jira-key")
     start.add_argument("--repo")
     start.add_argument("--branch")
+    start.add_argument("--branch-prefix")
     start.add_argument("--profile")
     start.add_argument("--automation-mode", choices=["manual", "semi", "auto"])
     start.add_argument("--confirm-branch", action="store_true")
@@ -198,6 +212,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="Show provider readiness.")
     status.set_defaults(func=command_status)
+
+    sync = subparsers.add_parser("sync-assigned", help="Sync assigned Jira issues into Hermes Kanban state.")
+    sync.add_argument("--issues-json", required=True, help="Jira issues JSON string or path from Atlassian MCP.")
+    sync.add_argument("--assignee", help="Username, email, display name, or account id to import.")
+    sync.add_argument("--profile", help="Hermes profile assigned to imported items.")
+    sync.add_argument("--automation-mode", choices=["manual", "semi", "auto"])
+    sync.set_defaults(func=command_sync)
     return parser
 
 

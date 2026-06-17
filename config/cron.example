@@ -1,0 +1,19 @@
+# Example crontab entries for assigned Jira issue sync.
+#
+# The first command should produce Jira issue JSON through the official
+# Atlassian MCP path. Keep this command aligned with your Hermes CLI setup and
+# the exact Atlassian MCP tool names exposed in your environment.
+#
+# The second command imports only tickets assigned to HERMES_JIRA_ASSIGNEE.
+
+SHELL=/bin/zsh
+HERMES_PLUGIN_DIR=/Users/replace-me/Development/atlassian-hermes-connector
+HERMES_JIRA_ASSIGNEE=you@example.com
+HERMES_PROFILE=default
+HERMES_KANBAN_STATE_PATH=$HOME/.hermes/atlassian-hermes-connector/kanban.json
+
+# Every 15 minutes: refresh assigned Jira issue JSON, then sync Hermes Kanban.
+*/15 * * * * cd "$HERMES_PLUGIN_DIR" && hermes --prompt "Use official Atlassian MCP to search unresolved Jira issues assigned to $HERMES_JIRA_ASSIGNEE in project $HERMES_PROJECT_KEY. Return only raw JSON with an issues array." > /tmp/hermes-assigned-jira.json && /usr/bin/python3 scripts/jira_cron_sync.py --issues-json /tmp/hermes-assigned-jira.json --assignee "$HERMES_JIRA_ASSIGNEE" --profile "$HERMES_PROFILE" >> /tmp/hermes-jira-sync.log 2>&1
+
+# If another scheduler already writes /tmp/hermes-assigned-jira.json, use only:
+# */15 * * * * cd "$HERMES_PLUGIN_DIR" && /usr/bin/python3 scripts/jira_cron_sync.py --issues-json /tmp/hermes-assigned-jira.json --assignee "$HERMES_JIRA_ASSIGNEE" --profile "$HERMES_PROFILE" >> /tmp/hermes-jira-sync.log 2>&1

@@ -8,6 +8,8 @@ It is intentionally Hermes-native:
 - official Atlassian Jira/Rovo MCP is configured in Hermes, not bundled here
 - Hermes Kanban state is stored locally as JSON
 - local development uses `git` for branch, commit, and push planning
+- branch names follow Jira-derived prefixes such as `bugfix/`, `feature/`, `hotfix/`, `docs/`, `test/`, or `chore/`
+- a cron-safe sync script creates/updates Hermes Kanban tasks only for tickets assigned to a configured user/email
 - PR creation requires a configured GitHub/Bitbucket MCP tool or an explicitly approved provider CLI fallback
 
 ## Quick Start
@@ -39,6 +41,19 @@ python3 scripts/ticket.py status
 7. Read `CLAUDE.md`, `AGENT.md`, and `README.md` in the target repo before editing.
 8. Commit with `work_commit`.
 9. After user review, use `pr_plan` and then the configured provider MCP or approved CLI.
+
+## Cron Sync
+
+Use `scripts/jira_cron_sync.py` with Jira issue JSON exported through official Atlassian MCP:
+
+```bash
+python3 scripts/jira_cron_sync.py \
+  --issues-json /tmp/hermes-assigned-jira.json \
+  --assignee you@example.com \
+  --profile default
+```
+
+See `config/cron.example` for a crontab template.
 
 ## Validation
 

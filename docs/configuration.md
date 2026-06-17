@@ -98,6 +98,31 @@ Repository selection considers all options:
 7. configured repository aliases
 8. git repositories discovered under `HERMES_DEVELOPMENT_ROOT`
 
+## Branch Naming
+
+Branch names are derived from Jira issue data:
+
+- `Bug`, `Defect`, or labels like `bug` -> `bugfix/<issue-key>-<summary>`
+- `Story`, `Feature`, `Epic`, or labels like `enhancement` -> `feature/<issue-key>-<summary>`
+- `Incident`, `Hotfix`, critical priority, or labels like `hotfix` -> `hotfix/<issue-key>-<summary>`
+- documentation labels/types -> `docs/<issue-key>-<summary>`
+- test/QA labels/types -> `test/<issue-key>-<summary>`
+- task/maintenance fallback -> `chore/<issue-key>-<summary>`
+
+A Jira label can override the type:
+
+```text
+branch:docs
+branch-type:bugfix
+type:feature
+```
+
+Customize mappings in `HERMES_REPO_MAP` with `branchTypes`, or force one prefix with:
+
+```bash
+HERMES_BRANCH_FORCE_PREFIX=feature/
+```
+
 ## Automation Modes
 
 Set `HERMES_AUTOMATION_MODE` or pass `automation_mode` to tools:
@@ -115,3 +140,22 @@ The plugin uses `git` for branch, commit, and push planning. Pull request creati
 - approved CLI fallback: authenticated `gh` or `bb`
 
 If none is configured, `pr_plan` blocks instead of pretending it can create a PR.
+
+## Assigned Ticket Cron Sync
+
+Set the assignee that cron is allowed to import:
+
+```bash
+HERMES_JIRA_ASSIGNEE=you@example.com
+```
+
+The sync accepts Jira issue JSON produced by the official Atlassian MCP server and filters locally by assignee email, username, display name, account id, or key:
+
+```bash
+python3 scripts/jira_cron_sync.py \
+  --issues-json /tmp/hermes-assigned-jira.json \
+  --assignee "$HERMES_JIRA_ASSIGNEE" \
+  --profile default
+```
+
+Install a crontab from `config/cron.example` only after replacing `HERMES_PLUGIN_DIR`, `HERMES_JIRA_ASSIGNEE`, and the Hermes MCP prompt/command for your environment.

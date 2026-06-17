@@ -47,6 +47,13 @@ Start a branch. In manual mode, pass the confirmation flag:
 python3 scripts/ticket.py start --jira-key HER-123 --confirm-branch
 ```
 
+Branch prefixes come from Jira issue type, priority, and labels. Examples:
+
+- bug issue: `bugfix/her-123-fix-login`
+- story or feature: `feature/her-124-add-dashboard`
+- hotfix or critical incident: `hotfix/her-125-restore-webhook`
+- docs label: `docs/her-126-update-runbook`
+
 The command creates `.hermes/work/<ISSUE_KEY>.md` in the target repo. Treat this file as the handoff between Jira, Hermes Kanban, and implementation.
 
 Before editing code, read these files in the target repository when present:
@@ -91,3 +98,16 @@ python3 scripts/ticket.py pr-plan \
 ```
 
 If a provider MCP tool is configured, use it. If not, ask the user whether to use `gh` or `bb`. If neither is available, stop.
+
+## Scheduled Jira Sync
+
+Use `scripts/jira_cron_sync.py` from cron to update/create Hermes Kanban tasks from Jira issue JSON. The script imports only issues assigned to `HERMES_JIRA_ASSIGNEE` or the `--assignee` value:
+
+```bash
+python3 scripts/jira_cron_sync.py \
+  --issues-json /tmp/hermes-assigned-jira.json \
+  --assignee you@example.com \
+  --profile default
+```
+
+See `config/cron.example` for a crontab template. Keep the Jira query/export step backed by the official Atlassian MCP server configured in Hermes.

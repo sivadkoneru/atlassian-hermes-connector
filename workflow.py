@@ -18,6 +18,44 @@ DEFAULT_TOOL_PREFIXES = {
     "github": ["github_create_pull_request", "create_pull_request", "github_pr_create"],
     "bitbucket": ["bitbucket_create_pull_request", "create_pull_request", "bitbucket_pr_create"],
 }
+DEFAULT_BRANCH_TYPES = {
+    "hotfix": {
+        "issue_types": ["Incident", "Hotfix"],
+        "labels": ["hotfix", "urgent", "p0", "p1"],
+        "statuses": [],
+        "priorities": ["Highest", "Critical", "Blocker"],
+    },
+    "bugfix": {
+        "issue_types": ["Bug", "Defect"],
+        "labels": ["bug", "bugfix", "defect"],
+        "statuses": [],
+        "priorities": [],
+    },
+    "feature": {
+        "issue_types": ["Story", "Feature", "New Feature", "Epic"],
+        "labels": ["feature", "enhancement"],
+        "statuses": [],
+        "priorities": [],
+    },
+    "docs": {
+        "issue_types": ["Documentation"],
+        "labels": ["docs", "documentation"],
+        "statuses": [],
+        "priorities": [],
+    },
+    "test": {
+        "issue_types": ["Test", "QA"],
+        "labels": ["test", "tests", "qa"],
+        "statuses": [],
+        "priorities": [],
+    },
+    "chore": {
+        "issue_types": ["Task", "Sub-task", "Subtask", "Maintenance"],
+        "labels": ["chore", "maintenance", "refactor"],
+        "statuses": [],
+        "priorities": [],
+    },
+}
 
 
 class WorkflowError(Exception):
@@ -233,6 +271,109 @@ def issue_labels(issue: Dict[str, Any], extra_labels: Optional[Iterable[str]] = 
 
 def issue_components(issue: Dict[str, Any]) -> Set[str]:
     return normalize_values(issue_fields(issue).get("components"))
+
+
+def issue_type_name(issue: Optional[Dict[str, Any]]) -> str:
+    if not issue:
+        return ""
+    issue_type = issue_fields(issue).get("issuetype") or issue.get("issuetype")
+    if isinstance(issue_type, dict):
+        return str(issue_type.get("name") or issue_type.get("value") or "")
+    return str(issue_type or "")
+
+
+def issue_status_name(issue: Optional[Dict[str, Any]]) -> str:
+    if not issue:
+        return ""
+    status = issue_fields(issue).get("status") or issue.get("status")
+    if isinstance(status, dict):
+        return str(status.get("name") or status.get("value") or "")
+    return str(status or "")
+
+
+def issue_priority_name(issue: Optional[Dict[str, Any]]) -> str:
+    if not issue:
+        return ""
+    priority = issue_fields(issue).get("priority") or issue.get("priority")
+    if isinstance(priority, dict):
+        return str(priority.get("name") or priority.get("value") or "")
+    return str(priority or "")
+
+
+def branch_type_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, List[str]]]:
+    configured = (config or load_config()).get("branchTypes") or {}
+    branch_types: Dict[str, Dict[str, List[str]]] = {
+        name: {key: list(values) for key, values in values_by_key.items()}
+        for name, values_by_key in DEFAULT_BRANCH_TYPES.items()
+    }
+    if isinstance(configured, dict):
+        for raw_name, raw_rules in configured.items():
+            if not isinstance(raw_rules, dict):
+                continue
+            name = slugify(str(raw_name), 32)
+            merged = branch_types.setdefault(
+                name,
+                {"issue_types": [], "labels": [], "statuses": [], "priorities": []},
+            )
+            for key in ("issue_types", "labels", "statuses", "priorities"):
+                values = raw_rules.get(key) or raw_rules.get(key.replace("_", ""))
+                if isinstance(values, str):
+                    values = [values]
+                if isinstance(values, list):
+                    merged[key].extend(str(value) for value in values)
+    return branch_types
+
+
+def explicit_branch_type_from_labels(issue: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not issue:
+        return None
+    for label in issue_fields(issue).get("labels") or []:
+        text = str(label)
+        for prefix in ("branch:", "branch-type:", "type:"):
+            if text.casefold().startswith(prefix):
+                return slugify(text.split(":", 1)[1], 32)
+    return None
+
+
+def branch_type_for_issue(issue: Optional[Dict[str, Any]], config: Optional[Dict[str, Any]] = None) -> str:
+    explicit = explicit_branch_type_from_labels(issue)
+    if explicit:
+        return explicit
+    labels = issue_labels(issue or {})
+    issue_type = normalize_values([issue_type_name(issue)])
+    status = normalize_values([issue_status_name(issue)])
+    priority = normalize_values([issue_priority_name(issue)])
+    for branch_type, rules in branch_type_config(config).items():
+        if labels & normalize_values(rules.get("labels")):
+            return branch_type
+        if issue_type & normalize_values(rules.get("issue_types")):
+            return branch_type
+        if status & normalize_values(rules.get("statuses")):
+            return branch_type
+        if priority & normalize_values(rules.get("priorities")):
+            return branch_type
+    return env("HERMES_BRANCH_DEFAULT_TYPE", "chore") or "chore"
+
+
+def branch_prefix_for_issue(
+    issue: Optional[Dict[str, Any]],
+    config: Optional[Dict[str, Any]] = None,
+    explicit_prefix: Optional[str] = None,
+) -> str:
+    prefix = explicit_prefix
+    if not prefix:
+        forced = env("HERMES_BRANCH_FORCE_PREFIX")
+        prefix = forced if forced else f"{branch_type_for_issue(issue, config)}/"
+    return prefix if prefix.endswith("/") else f"{prefix}/"
+
+
+def branch_name_for_issue(
+    issue: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
+    explicit_prefix: Optional[str] = None,
+) -> str:
+    key = issue_key(issue, "JIRA")
+    return f"{branch_prefix_for_issue(issue, config, explicit_prefix)}{key.lower()}-{slugify(issue_summary(issue), 42)}"
 
 
 def flatten_adf(value: Any) -> str:
@@ -514,14 +655,89 @@ def create_kanban_item(args: Dict[str, Any]) -> Dict[str, Any]:
         "profile": args.get("profile"),
         "status": state["board"]["columns"][0],
         "automation_mode": automation_mode(args),
+        "branch_type": branch_type_for_issue(jira_issue),
         "created_at": utc_now(),
         "updated_at": utc_now(),
     }
-    items = [existing for existing in state.get("items", []) if existing.get("id") != item["id"]]
+    existing = next((old for old in state.get("items", []) if old.get("id") == item["id"]), None)
+    if existing:
+        item["created_at"] = existing.get("created_at", item["created_at"])
+        item["status"] = existing.get("status") or item["status"]
+        item["profile"] = item["profile"] or existing.get("profile")
+    items = [old for old in state.get("items", []) if old.get("id") != item["id"]]
     items.append(item)
     state["items"] = items
     save_state(state)
     return {"success": True, "item": item, "state_path": str(state_path())}
+
+
+def assignee_values(issue: Dict[str, Any]) -> Set[str]:
+    assignee = issue_fields(issue).get("assignee") or issue.get("assignee") or {}
+    if not isinstance(assignee, dict):
+        return normalize_values([assignee])
+    values = []
+    for key in ("emailAddress", "email", "name", "displayName", "accountId", "key"):
+        if assignee.get(key):
+            values.append(assignee[key])
+    return normalize_values(values)
+
+
+def assignee_matches(issue: Dict[str, Any], assignee: str) -> bool:
+    if not assignee:
+        raise WorkflowError("assignee is required for Jira sync.")
+    return bool(assignee_values(issue) & normalize_values([assignee]))
+
+
+def normalize_issue_collection(raw_issues: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw_issues, dict):
+        raw_issues = raw_issues.get("issues") or raw_issues.get("data") or [raw_issues]
+    if not isinstance(raw_issues, list):
+        raise WorkflowError("issues must be a list or an object containing an issues array.")
+    return [issue for issue in raw_issues if isinstance(issue, dict)]
+
+
+def sync_assigned_kanban_items(args: Dict[str, Any]) -> Dict[str, Any]:
+    issues = normalize_issue_collection(args.get("issues") or [])
+    assignee = args.get("assignee") or env("HERMES_JIRA_ASSIGNEE")
+    if not assignee:
+        raise WorkflowError("Set HERMES_JIRA_ASSIGNEE or pass assignee.")
+
+    created: List[str] = []
+    updated: List[str] = []
+    skipped: List[Dict[str, str]] = []
+    existing_keys = {item.get("jira_key") for item in load_state().get("items", [])}
+
+    for issue in issues:
+        key = issue_key(issue)
+        if not key:
+            skipped.append({"key": "", "reason": "missing Jira key"})
+            continue
+        if not assignee_matches(issue, assignee):
+            skipped.append({"key": key, "reason": "assignee did not match"})
+            continue
+        create_kanban_item(
+            {
+                "jira_issue": issue,
+                "profile": args.get("profile") or env("HERMES_PROFILE", "default"),
+                "automation_mode": args.get("automation_mode"),
+            }
+        )
+        if key in existing_keys:
+            updated.append(key)
+        else:
+            created.append(key)
+            existing_keys.add(key)
+        if args.get("profile"):
+            assign_profile({"jira_key": key, "profile": args["profile"]})
+
+    return {
+        "success": True,
+        "assignee": assignee,
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "state_path": str(state_path()),
+    }
 
 
 def assign_profile(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -645,12 +861,11 @@ def start_branch(args: Dict[str, Any]) -> Dict[str, Any]:
         return blocked
 
     issue = issue_from_args_or_item(args)
-    match = resolve_repository(issue, load_config(), args.get("repo"))
+    config = load_config()
+    match = resolve_repository(issue, config, args.get("repo"))
     repo = match.path
     ensure_clean_worktree(repo, bool(args.get("allow_dirty")))
-    key = issue_key(issue, "JIRA")
-    branch_prefix = env("HERMES_BRANCH_PREFIX", "hermes/") or "hermes/"
-    branch = args.get("branch") or f"{branch_prefix}{key.lower()}-{slugify(issue_summary(issue), 42)}"
+    branch = args.get("branch") or branch_name_for_issue(issue, config, args.get("branch_prefix"))
     existing_branches = run_git(repo, ["branch", "--list", branch])
     if existing_branches:
         run_git(repo, ["checkout", branch], capture=False)

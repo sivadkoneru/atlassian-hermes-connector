@@ -54,6 +54,25 @@ KANBAN_ASSIGN_PROFILE = {
     },
 }
 
+KANBAN_SYNC_ASSIGNED = {
+    "name": "kanban_sync_assigned",
+    "description": (
+        "Create or update Hermes Kanban items from Jira issues fetched through "
+        "official Atlassian MCP, importing only issues assigned to the configured "
+        "username, email, display name, or account id."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "issues": {"type": "array", "items": {"type": "object"}},
+            "assignee": {"type": "string", "description": "Username, email, display name, or account id."},
+            "profile": {"type": "string", "description": "Hermes profile assigned to imported items."},
+            "automation_mode": {"type": "string", "enum": ["manual", "semi", "auto"]},
+        },
+        "required": ["issues"],
+    },
+}
+
 REPOSITORY_RESOLVE = {
     "name": "repository_resolve",
     "description": (
@@ -87,6 +106,7 @@ WORK_START_BRANCH = {
             "jira_key": {"type": "string"},
             "repo": {"type": "string"},
             "branch": {"type": "string"},
+            "branch_prefix": {"type": "string"},
             "automation_mode": {"type": "string", "enum": ["manual", "semi", "auto"]},
             "confirm_branch": {"type": "boolean"},
             "allow_dirty": {"type": "boolean"},
