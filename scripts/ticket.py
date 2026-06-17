@@ -128,6 +128,18 @@ def command_status(_args: argparse.Namespace) -> Dict[str, Any]:
     return workflow.provider_status()
 
 
+def command_discover_mcp(args: argparse.Namespace) -> Dict[str, Any]:
+    tool_catalog = load_issue_arg(args.tools_json) if args.tools_json else None
+    return workflow.discover_atlassian_mcp_tools(
+        {
+            "server_name": args.server_name,
+            "tools": workflow.split_csv(args.tools),
+            "tool_catalog": tool_catalog,
+            "catalog_path": args.catalog_path,
+        }
+    )
+
+
 def command_sync(args: argparse.Namespace) -> Dict[str, Any]:
     issues = load_issue_arg(args.issues_json)
     return workflow.sync_assigned_kanban_items(
@@ -212,6 +224,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="Show provider readiness.")
     status.set_defaults(func=command_status)
+
+    discover = subparsers.add_parser("discover-mcp", help="Map available Atlassian MCP tools to Jira actions.")
+    discover.add_argument("--server-name", help="Hermes MCP server name; defaults to HERMES_ATLASSIAN_MCP_SERVER.")
+    discover.add_argument("--tools", default="", help="Comma-separated MCP tool names.")
+    discover.add_argument("--tools-json", help="MCP tool catalog JSON string or path.")
+    discover.add_argument("--catalog-path", help="Path to a Hermes MCP tool catalog JSON file.")
+    discover.set_defaults(func=command_discover_mcp)
 
     sync = subparsers.add_parser("sync-assigned", help="Sync assigned Jira issues into Hermes Kanban state.")
     sync.add_argument("--issues-json", required=True, help="Jira issues JSON string or path from Atlassian MCP.")

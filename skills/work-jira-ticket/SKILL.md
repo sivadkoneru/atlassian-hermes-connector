@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [Jira, Git, Repository, Automation]
-    requires_tools: [repository_resolve, work_start_branch]
+    requires_tools: [mcp_discover_tools, repository_resolve, work_start_branch]
 ---
 
 # Work Jira Ticket
@@ -16,10 +16,11 @@ Use this skill to turn one Jira issue into a local implementation branch.
 
 ## Start
 
-1. Fetch the ticket through the configured official Atlassian MCP server.
-2. Resolve the repository using `HERMES_REPO_MAP`, `HERMES_DEVELOPMENT_ROOT`, Jira labels like `repo:<name>`, or `HERMES_JIRA_REPO_FIELD`.
-3. Create or update the Hermes Kanban item with `kanban_create_item`.
-4. Start the branch with:
+1. Call `mcp_discover_tools` if the exact Atlassian MCP tool names are unknown.
+2. Fetch the ticket through the configured official Atlassian MCP server.
+3. Resolve the repository using `HERMES_REPO_MAP`, `HERMES_DEVELOPMENT_ROOT`, Jira labels like `repo:<name>`, or `HERMES_JIRA_REPO_FIELD`.
+4. Create or update the Hermes Kanban item with `kanban_create_item`.
+5. Start the branch with:
 
 ```bash
 python3 scripts/ticket.py start --jira-key <ISSUE_KEY> --confirm-branch

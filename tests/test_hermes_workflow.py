@@ -172,6 +172,38 @@ class HermesWorkflowTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertIn("atlassian_mcp", result)
 
+    def test_discovers_atlassian_mcp_jira_actions(self) -> None:
+        result = workflow.discover_atlassian_mcp_tools(
+            {
+                "tools": [
+                    "mcp_atlassian_searchJiraIssues",
+                    "mcp_atlassian_getJiraIssue",
+                    "mcp_atlassian_createJiraIssue",
+                    "mcp_atlassian_assignJiraIssue",
+                    "mcp_atlassian_transitionJiraIssue",
+                    "mcp_atlassian_getCurrentUser",
+                    "mcp_github_create_pull_request",
+                ]
+            }
+        )
+        self.assertTrue(result["success"])
+        self.assertEqual(result["actions"]["search_issues"]["tool"], "mcp_atlassian_searchJiraIssues")
+        self.assertEqual(result["actions"]["get_issue"]["tool"], "mcp_atlassian_getJiraIssue")
+        self.assertEqual(result["actions"]["create_issue"]["tool"], "mcp_atlassian_createJiraIssue")
+        self.assertEqual(result["actions"]["assign_issue"]["tool"], "mcp_atlassian_assignJiraIssue")
+        self.assertEqual(result["actions"]["transition_issue"]["tool"], "mcp_atlassian_transitionJiraIssue")
+        self.assertEqual(result["actions"]["get_myself"]["tool"], "mcp_atlassian_getCurrentUser")
+        self.assertNotIn("mcp_github_create_pull_request", result["available_tools"])
+
+    def test_provider_status_uses_configured_atlassian_tool_names(self) -> None:
+        tools_csv = "mcp_atlassian_searchJiraIssues,mcp_atlassian_getJiraIssue"
+        with mock.patch.dict(os.environ, {"HERMES_ATLASSIAN_MCP_TOOLS": tools_csv}, clear=False):
+            result = workflow.provider_status()
+        discovery = result["atlassian_mcp"]["discovery"]
+        self.assertEqual(discovery["actions"]["search_issues"]["tool"], "mcp_atlassian_searchJiraIssues")
+        self.assertEqual(discovery["actions"]["get_issue"]["tool"], "mcp_atlassian_getJiraIssue")
+        self.assertIn("create_issue", discovery["missing_actions"])
+
     def test_sync_assigned_issues_filters_by_email(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_path = Path(tmp) / "kanban.json"

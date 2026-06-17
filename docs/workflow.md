@@ -5,9 +5,17 @@
 Use official Atlassian MCP tools for live Jira operations:
 
 1. confirm the Atlassian MCP server is connected
-2. create or fetch the Jira issue in the one configured project
-3. include a repository hint, preferably `repo:<repository-name>` as a label
-4. include `Repository: <repository-name>` in the description when labels are unavailable
+2. discover the available Atlassian MCP Jira tools
+3. create or fetch the Jira issue in the one configured project
+4. include a repository hint, preferably `repo:<repository-name>` as a label
+5. include `Repository: <repository-name>` in the description when labels are unavailable
+
+Discover tools:
+
+```bash
+python3 scripts/ticket.py discover-mcp \
+  --tools "mcp_atlassian_searchJiraIssues,mcp_atlassian_getJiraIssue"
+```
 
 Then create the Hermes-side item:
 

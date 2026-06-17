@@ -73,6 +73,33 @@ KANBAN_SYNC_ASSIGNED = {
     },
 }
 
+MCP_DISCOVER_TOOLS = {
+    "name": "mcp_discover_tools",
+    "description": (
+        "Discover official Atlassian Jira MCP tools exposed through Hermes and "
+        "map them to canonical Jira actions used by this plugin."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "server_name": {"type": "string", "description": "Hermes MCP server name; defaults to atlassian."},
+            "tools": {
+                "type": "array",
+                "description": "Tool names or tool objects from Hermes MCP discovery.",
+                "items": {"type": ["string", "object"]},
+            },
+            "tool_catalog": {
+                "type": "object",
+                "description": "Hermes MCP tool catalog object; may contain a tools array.",
+            },
+            "catalog_path": {
+                "type": "string",
+                "description": "Optional path to a JSON catalog exported from Hermes MCP tooling.",
+            },
+        },
+    },
+}
+
 REPOSITORY_RESOLVE = {
     "name": "repository_resolve",
     "description": (

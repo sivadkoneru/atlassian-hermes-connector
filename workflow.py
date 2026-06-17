@@ -18,6 +18,65 @@ DEFAULT_TOOL_PREFIXES = {
     "github": ["github_create_pull_request", "create_pull_request", "github_pr_create"],
     "bitbucket": ["bitbucket_create_pull_request", "create_pull_request", "bitbucket_pr_create"],
 }
+ATLASSIAN_MCP_ACTIONS = {
+    "search_issues": {
+        "patterns": [
+            ["jira", "search", "issue"],
+            ["search", "jira", "issues"],
+            ["search", "issues"],
+            ["issue", "search"],
+            ["jql"],
+        ],
+        "call_hint": {
+            "jql": "assignee = currentUser() AND project = ${HERMES_PROJECT_KEY} ORDER BY priority DESC, updated DESC"
+        },
+    },
+    "get_issue": {
+        "patterns": [
+            ["jira", "get", "issue"],
+            ["get", "jira", "issue"],
+            ["get", "issue"],
+            ["read", "issue"],
+            ["fetch", "issue"],
+        ],
+        "call_hint": {"issue_key": "HER-123"},
+    },
+    "create_issue": {
+        "patterns": [
+            ["jira", "create", "issue"],
+            ["create", "jira", "issue"],
+            ["create", "issue"],
+        ],
+        "call_hint": {"project_key": "${HERMES_PROJECT_KEY}", "summary": "..."},
+    },
+    "assign_issue": {
+        "patterns": [
+            ["jira", "assign", "issue"],
+            ["assign", "jira", "issue"],
+            ["assign", "issue"],
+        ],
+        "call_hint": {"issue_key": "HER-123", "assignee": "${HERMES_JIRA_ASSIGNEE}"},
+    },
+    "transition_issue": {
+        "patterns": [
+            ["jira", "transition", "issue"],
+            ["transition", "jira", "issue"],
+            ["transition", "issue"],
+            ["move", "issue"],
+            ["update", "status"],
+        ],
+        "call_hint": {"issue_key": "HER-123", "transition": "In Progress"},
+    },
+    "get_myself": {
+        "patterns": [
+            ["jira", "myself"],
+            ["myself"],
+            ["current", "user"],
+            ["get", "user", "current"],
+        ],
+        "call_hint": {},
+    },
+}
 DEFAULT_BRANCH_TYPES = {
     "hotfix": {
         "issue_types": ["Incident", "Hotfix"],
@@ -136,6 +195,18 @@ def load_config() -> Dict[str, Any]:
         "profiles": {},
         "repositories": [],
     }
+
+
+def load_optional_json(path: Optional[str]) -> Any:
+    if not path:
+        return None
+    candidate = expand_path(path)
+    if not candidate.exists():
+        raise WorkflowError(f"Tool catalog file not found: {candidate}")
+    try:
+        return json.loads(candidate.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"Tool catalog is not valid JSON: {candidate}: {exc}") from exc
 
 
 def state_path() -> Path:
@@ -930,7 +1001,145 @@ def configured_mcp_tool(provider: str) -> Optional[str]:
     return env(env_name)
 
 
+def tokenize_tool_name(name: str) -> Set[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    parts = re.split(r"[^A-Za-z0-9]+", spaced)
+    tokens = {part.lower() for part in parts if part}
+    expanded = set(tokens)
+    for token in tokens:
+        if token.endswith("issues"):
+            expanded.add("issue")
+        if token.endswith("s") and len(token) > 3:
+            expanded.add(token[:-1])
+    return expanded
+
+
+def tool_name_from_entry(entry: Any) -> Optional[str]:
+    if isinstance(entry, str):
+        return entry.strip() or None
+    if isinstance(entry, dict):
+        for key in ("name", "tool", "id", "function"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        function = entry.get("function")
+        if isinstance(function, dict):
+            value = function.get("name")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def tools_from_catalog(catalog: Any) -> List[str]:
+    if catalog is None:
+        return []
+    if isinstance(catalog, str):
+        return split_csv(catalog) or [catalog]
+    if isinstance(catalog, list):
+        return [name for item in catalog if (name := tool_name_from_entry(item))]
+    if isinstance(catalog, dict):
+        direct_name = tool_name_from_entry(catalog)
+        if direct_name:
+            return [direct_name]
+        for key in ("tools", "data", "items"):
+            if key in catalog:
+                return tools_from_catalog(catalog[key])
+        server_tools: List[str] = []
+        for value in catalog.values():
+            if isinstance(value, (list, dict)):
+                server_tools.extend(tools_from_catalog(value))
+        return server_tools
+    return []
+
+
+def configured_atlassian_tool_names(args: Dict[str, Any]) -> List[str]:
+    names: List[str] = []
+    names.extend(tools_from_catalog(args.get("tools")))
+    names.extend(tools_from_catalog(args.get("tool_catalog")))
+    names.extend(tools_from_catalog(load_optional_json(args.get("catalog_path"))))
+    names.extend(tools_from_catalog(load_optional_json(env("HERMES_MCP_TOOL_CATALOG"))))
+    names.extend(split_csv(env("HERMES_ATLASSIAN_MCP_TOOLS")))
+    deduped: List[str] = []
+    seen: Set[str] = set()
+    for name in names:
+        if name not in seen:
+            deduped.append(name)
+            seen.add(name)
+    return deduped
+
+
+def atlassian_candidate_tools(tool_names: List[str], server_name: str) -> List[str]:
+    server_prefix = f"mcp_{server_name.lower()}_"
+    candidates: List[str] = []
+    for name in tool_names:
+        lowered = name.lower()
+        tokens = tokenize_tool_name(name)
+        if lowered.startswith(server_prefix) or "atlassian" in tokens or "jira" in tokens:
+            candidates.append(name)
+    return candidates
+
+
+def score_tool_for_action(tool_name: str, action: str, server_name: str) -> Dict[str, Any]:
+    tokens = tokenize_tool_name(tool_name)
+    lowered = tool_name.lower()
+    server_prefix = f"mcp_{server_name.lower()}_"
+    best_score = 0
+    best_pattern: List[str] = []
+    for pattern in ATLASSIAN_MCP_ACTIONS[action]["patterns"]:
+        if set(pattern).issubset(tokens):
+            score = len(pattern) * 10
+            if lowered.startswith(server_prefix):
+                score += 8
+            if "jira" in tokens:
+                score += 5
+            if "confluence" in tokens:
+                score -= 20
+            if score > best_score:
+                best_score = score
+                best_pattern = pattern
+    return {"score": best_score, "matched_pattern": best_pattern}
+
+
+def discover_atlassian_mcp_tools(args: Dict[str, Any]) -> Dict[str, Any]:
+    server_name = args.get("server_name") or env("HERMES_ATLASSIAN_MCP_SERVER", "atlassian") or "atlassian"
+    tool_names = configured_atlassian_tool_names(args)
+    candidates = atlassian_candidate_tools(tool_names, server_name)
+    actions: Dict[str, Dict[str, Any]] = {}
+    missing: List[str] = []
+
+    for action in ATLASSIAN_MCP_ACTIONS:
+        scored: List[Dict[str, Any]] = []
+        for tool_name in candidates:
+            score = score_tool_for_action(tool_name, action, server_name)
+            if score["score"] > 0:
+                scored.append({"tool": tool_name, **score})
+        scored.sort(key=lambda item: item["score"], reverse=True)
+        if scored:
+            best = scored[0]
+            actions[action] = {
+                "tool": best["tool"],
+                "confidence": "high" if best["score"] >= 30 else "medium",
+                "matched_pattern": best["matched_pattern"],
+                "call_hint": ATLASSIAN_MCP_ACTIONS[action]["call_hint"],
+            }
+        else:
+            missing.append(action)
+
+    return {
+        "success": True,
+        "server_name": server_name,
+        "available_tools": candidates,
+        "actions": actions,
+        "missing_actions": missing,
+        "configured": bool(actions),
+    }
+
+
 def provider_status() -> Dict[str, Any]:
+    try:
+        discovery = discover_atlassian_mcp_tools({})
+    except WorkflowError as exc:
+        discovery = {"success": False, "error": str(exc), "actions": {}, "missing_actions": list(ATLASSIAN_MCP_ACTIONS)}
     return {
         "success": True,
         "atlassian_mcp": {
@@ -938,6 +1147,7 @@ def provider_status() -> Dict[str, Any]:
             "url_env": "ATLASSIAN_MCP_URL",
             "configured": bool(env("ATLASSIAN_MCP_URL") or env("HERMES_ATLASSIAN_MCP_SERVER")),
             "note": "Configure the official Atlassian Jira/Rovo MCP server in ~/.hermes/config.yaml.",
+            "discovery": discovery,
         },
         "github": {
             "mcp_tool": configured_mcp_tool("github"),

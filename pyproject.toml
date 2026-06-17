@@ -1,6 +1,6 @@
 [project]
 name = "atlassian-hermes-connector"
-version = "0.2.0"
+version = "0.3.0"
 description = "Hermes plugin for Jira MCP, Kanban profiles, local git workflows, and reviewed GitHub or Bitbucket pull requests."
 readme = "README.md"
 requires-python = ">=3.9"

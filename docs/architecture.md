@@ -36,6 +36,18 @@ Hermes Agent ---- atlassian-hermes-connector plugin
 - `skills/`: opt-in Hermes skills loaded via the plugin namespace.
 - `scripts/ticket.py`: local CLI helper for testing and manual operation.
 
+## MCP Discovery
+
+`mcp_discover_tools` maps whatever official Atlassian MCP tool names Hermes exposes into stable canonical actions used by the rest of the plugin. This avoids hardcoding exact Atlassian tool names in workflow code.
+
+The discovery layer accepts direct tool names, Hermes catalog JSON, or `HERMES_ATLASSIAN_MCP_TOOLS`, then reports:
+
+- mapped action to MCP tool name
+- confidence
+- matched token pattern
+- call hints for common Jira arguments
+- missing actions
+
 ## Data Model
 
 Kanban state is stored at `HERMES_KANBAN_STATE_PATH`:

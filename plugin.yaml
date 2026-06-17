@@ -1,5 +1,5 @@
 name: atlassian-hermes-connector
-version: 0.2.0
+version: 0.3.0
 description: Hermes Kanban and git workflow connector for Jira work sourced through Atlassian MCP.
 author: Siva Koneru
 provides_tools:
@@ -7,6 +7,7 @@ provides_tools:
   - kanban_create_item
   - kanban_assign_profile
   - kanban_sync_assigned
+  - mcp_discover_tools
   - repository_resolve
   - work_start_branch
   - work_commit
@@ -23,3 +24,5 @@ requires_env:
     description: Local directory where repositories are discovered.
   - name: HERMES_JIRA_ASSIGNEE
     description: Jira assignee username, email, display name, or account id used by cron sync.
+  - name: HERMES_ATLASSIAN_MCP_TOOLS
+    description: Optional comma-separated Hermes MCP tool names for Atlassian tool auto-discovery.

@@ -35,6 +35,33 @@ hermes mcp configure atlassian
 
 Hermes registers MCP tools as `mcp_<server>_<tool>`, so an Atlassian server named `atlassian` exposes tools with names like `mcp_atlassian_*`.
 
+## Atlassian MCP Tool Discovery
+
+The plugin can auto-map available Atlassian MCP tools to canonical Jira actions:
+
+```bash
+python3 scripts/ticket.py discover-mcp \
+  --tools "mcp_atlassian_searchJiraIssues,mcp_atlassian_getJiraIssue,mcp_atlassian_createJiraIssue"
+```
+
+Supported canonical actions:
+
+- `search_issues`
+- `get_issue`
+- `create_issue`
+- `assign_issue`
+- `transition_issue`
+- `get_myself`
+
+Discovery accepts:
+
+- a comma-separated list through `HERMES_ATLASSIAN_MCP_TOOLS`
+- a JSON catalog path through `HERMES_MCP_TOOL_CATALOG`
+- direct tool input via `mcp_discover_tools`
+- CLI input via `scripts/ticket.py discover-mcp`
+
+`provider_status` includes the discovery result when tool names or a catalog are configured.
+
 ## One Project And Board
 
 The plugin intentionally manages one Hermes project and one Hermes Kanban board:

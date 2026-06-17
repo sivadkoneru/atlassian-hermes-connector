@@ -40,6 +40,11 @@ def kanban_sync_assigned(args: Dict[str, Any], **kwargs) -> str:
     return _wrap(workflow.sync_assigned_kanban_items, args)
 
 
+def mcp_discover_tools(args: Dict[str, Any], **kwargs) -> str:
+    del kwargs
+    return _wrap(workflow.discover_atlassian_mcp_tools, args)
+
+
 def repository_resolve(args: Dict[str, Any], **kwargs) -> str:
     del kwargs
     return _wrap(workflow.resolve_repository_payload, args)

@@ -10,6 +10,7 @@ It is intentionally Hermes-native:
 - local development uses `git` for branch, commit, and push planning
 - branch names follow Jira-derived prefixes such as `bugfix/`, `feature/`, `hotfix/`, `docs/`, `test/`, or `chore/`
 - a cron-safe sync script creates/updates Hermes Kanban tasks only for tickets assigned to a configured user/email
+- Atlassian MCP tool auto-discovery maps available Jira MCP tools to canonical plugin actions
 - PR creation requires a configured GitHub/Bitbucket MCP tool or an explicitly approved provider CLI fallback
 
 ## Quick Start
@@ -33,14 +34,24 @@ python3 scripts/ticket.py status
 ## Core Workflow
 
 1. Use Atlassian MCP to create or fetch one Jira issue in the configured project.
-2. Call `kanban_ensure_board` to create the Hermes project and Kanban board.
-3. Call `kanban_create_item` with the Jira issue JSON.
-4. Assign a Hermes profile with `kanban_assign_profile`.
-5. Resolve the local repo with `repository_resolve`.
-6. Start a git branch with `work_start_branch`.
-7. Read `CLAUDE.md`, `AGENT.md`, and `README.md` in the target repo before editing.
-8. Commit with `work_commit`.
-9. After user review, use `pr_plan` and then the configured provider MCP or approved CLI.
+2. Call `mcp_discover_tools` or `scripts/ticket.py discover-mcp` to map available Atlassian MCP tools.
+3. Call `kanban_ensure_board` to create the Hermes project and Kanban board.
+4. Call `kanban_create_item` with the Jira issue JSON.
+5. Assign a Hermes profile with `kanban_assign_profile`.
+6. Resolve the local repo with `repository_resolve`.
+7. Start a git branch with `work_start_branch`.
+8. Read `CLAUDE.md`, `AGENT.md`, and `README.md` in the target repo before editing.
+9. Commit with `work_commit`.
+10. After user review, use `pr_plan` and then the configured provider MCP or approved CLI.
+
+## MCP Discovery
+
+```bash
+python3 scripts/ticket.py discover-mcp \
+  --tools "mcp_atlassian_searchJiraIssues,mcp_atlassian_getJiraIssue"
+```
+
+Discovery maps available Atlassian MCP tools to canonical actions such as `search_issues`, `get_issue`, `create_issue`, `assign_issue`, and `transition_issue`.
 
 ## Cron Sync
 
@@ -60,5 +71,5 @@ See `config/cron.example` for a crontab template.
 ```bash
 python3 -m unittest discover -s tests
 env PYTHONPYCACHEPREFIX=/private/tmp/atlassian-hermes-pycache \
-  python3 -m py_compile __init__.py schemas.py tools.py workflow.py scripts/ticket.py
+  python3 -m py_compile __init__.py schemas.py tools.py workflow.py scripts/ticket.py scripts/jira_cron_sync.py
 ```
