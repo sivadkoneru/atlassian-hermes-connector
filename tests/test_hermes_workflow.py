@@ -96,11 +96,45 @@ class HermesWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             workflow.run_git(repo, ["init"], capture=True)
+            workflow.run_git(repo, ["checkout", "-b", "feature/her-2"], capture=True)
             workflow.run_git(repo, ["remote", "add", "origin", "git@github.com:owner/example.git"])
             result = workflow.pr_plan({"repo_path": str(repo), "jira_key": "HER-2", "summary": "Add tests"})
             self.assertFalse(result["success"])
             self.assertTrue(result["blocked"])
             self.assertIn("review", result["reason"].lower())
+
+    def test_pr_plan_returns_mcp_call_when_provider_tool_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workflow.run_git(repo, ["init"], capture=True)
+            workflow.run_git(repo, ["checkout", "-b", "feature/her-3"], capture=True)
+            workflow.run_git(repo, ["remote", "add", "origin", "git@github.com:owner/example.git"])
+            with mock.patch.dict(os.environ, {"HERMES_GITHUB_MCP_TOOL": "mcp_github_create_pull_request"}):
+                result = workflow.pr_plan(
+                    {
+                        "repo_path": str(repo),
+                        "jira_key": "HER-3",
+                        "summary": "Add provider bridge",
+                        "reviewed": True,
+                    }
+                )
+            creation = result["pull_request"]["creation"]
+            self.assertTrue(result["success"])
+            self.assertEqual(creation["mode"], "mcp")
+            self.assertEqual(creation["tool"], "mcp_github_create_pull_request")
+            self.assertEqual(creation["arguments"]["head"], "feature/her-3")
+            self.assertEqual(creation["arguments"]["repository"], "example")
+
+    def test_start_branch_manual_mode_requires_confirmation_before_repo_lookup(self) -> None:
+        result = workflow.start_branch(
+            {
+                "jira_issue": {"key": "HER-4", "fields": {"summary": "Manual gate"}},
+                "automation_mode": "manual",
+            }
+        )
+        self.assertFalse(result["success"])
+        self.assertTrue(result["requires_confirmation"])
+        self.assertEqual(result["confirmation_key"], "confirm_branch")
 
     def test_tool_handler_returns_json_string(self) -> None:
         result = json.loads(tools.provider_status({}))

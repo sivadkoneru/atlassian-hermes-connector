@@ -788,16 +788,57 @@ def pr_plan(args: Dict[str, Any]) -> Dict[str, Any]:
         "git_push_command": ["git", "push", "-u", "origin", branch],
     }
     if mcp_tool:
+        mcp_arguments = {
+            "title": plan["title"],
+            "body": plan["body"],
+            "source_branch": branch,
+            "target_branch": base,
+            "base": base,
+            "head": branch,
+        }
+        if parsed.get("owner"):
+            mcp_arguments["owner"] = parsed["owner"]
+        if parsed.get("repo"):
+            mcp_arguments["repository"] = parsed["repo"]
         plan["creation"] = {
             "mode": "mcp",
             "tool": mcp_tool,
+            "arguments": mcp_arguments,
             "instruction": "Call the configured provider MCP tool with title, body, source branch, and base branch.",
         }
         return {"success": True, "pull_request": plan}
     if cli:
+        if provider == "github":
+            cli_command = [
+                "gh",
+                "pr",
+                "create",
+                "--title",
+                plan["title"],
+                "--body",
+                plan["body"],
+                "--base",
+                base,
+                "--head",
+                branch,
+            ]
+        else:
+            cli_command = [
+                "bb",
+                "pr",
+                "create",
+                "--title",
+                plan["title"],
+                "--description",
+                plan["body"],
+                "--destination",
+                base,
+                "--source",
+                branch,
+            ]
         plan["creation"] = {
             "mode": "cli",
-            "command": "gh pr create" if provider == "github" else "bb pr create",
+            "command": cli_command,
             "instruction": "Use this CLI only after the user approves using provider CLI instead of MCP.",
         }
         return {"success": True, "pull_request": plan}
