@@ -120,7 +120,6 @@ def command_pr(args: argparse.Namespace) -> Dict[str, Any]:
             "provider": args.provider,
             "base": args.base,
             "reviewed": args.reviewed,
-            "push": args.push,
         }
     )
 
@@ -221,7 +220,6 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--provider", choices=["auto", "github", "bitbucket"], default="auto")
     pr.add_argument("--base")
     pr.add_argument("--reviewed", action="store_true")
-    pr.add_argument("--push", action="store_true")
     pr.set_defaults(func=command_pr)
 
     status = subparsers.add_parser("status", help="Show provider readiness.")
@@ -248,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         print_json(args.func(args))
         return 0
-    except workflow.WorkflowError as exc:
+    except (json.JSONDecodeError, OSError, workflow.WorkflowError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
