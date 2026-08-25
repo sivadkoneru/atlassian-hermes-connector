@@ -64,7 +64,7 @@ Branch prefixes come from Jira issue type, priority, and labels. Examples:
 - hotfix or critical incident: `hotfix/her-125-restore-webhook`
 - docs label: `docs/her-126-update-runbook`
 
-The command creates `.hermes/work/<ISSUE_KEY>.md` in the target repo. Treat this file as the handoff between Jira, Hermes Kanban, and implementation. The packet includes imported Jira comments and dependency/blocker context so ticket discussion and upstream constraints are visible before code changes begin.
+The command creates `.hermes/work/<ISSUE_KEY>.md` in the target repo. Treat this file as the handoff between Jira, Hermes Kanban, and implementation. `start_branch` refuses to run on a dirty worktree, but it ignores its own `.hermes/` directory, so an existing work packet never blocks the next ticket. The packet includes imported Jira comments and dependency/blocker context so ticket discussion and upstream constraints are visible before code changes begin.
 
 Before editing code, read these files in the target repository when present:
 

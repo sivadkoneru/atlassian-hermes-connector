@@ -81,7 +81,7 @@ The branch type is selected from explicit branch labels, Jira issue type, labels
 
 - Do not duplicate Jira auth. The plugin relies on official Atlassian MCP and Hermes OAuth handling.
 - Keep local state inspectable. JSON is easy to review, commit-ignore, and migrate.
-- Make repository resolution explainable. The tool returns the selected repo, score, reason, and all supported matching options.
+- Make repository resolution explainable. The tool returns the selected repo, score, reason, and all supported matching options. Each repository is scored on its strongest hint, and hint sources are banded far enough apart that Jira project/label/component signals can only break ties between equally strong hints — never override a stated one. An explicit `repo` argument therefore always wins, and two repositories that match equally well raise an ambiguity error rather than a silent guess.
 - Separate git from PR providers. `git` handles branch, commit, and push; PR creation requires provider MCP or explicit CLI fallback.
 - Require human review before PR creation by default.
 - Sync only assigned Jira work. The cron importer refuses to create/update items unless the Jira assignee matches the configured username/email/account id.
