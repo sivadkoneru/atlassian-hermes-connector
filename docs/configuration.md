@@ -147,6 +147,10 @@ Repository selection considers all options:
 7. configured repository aliases
 8. git repositories discovered under `HERMES_DEVELOPMENT_ROOT`
 
+A stated hint always beats configuration: the Jira project, label, and component mappings only choose between repositories that matched hints equally well, or select a repository when no hint was given. A hint earlier in the list beats a later one, and an exact name/alias match beats a partial one from any source.
+
+Partial matches are whole-segment, so `api` matches `api-gateway` and `payments-api` but not `rapid`. Prefixes such as `pay` for `payments-service` do not match — add them to `repositories[].aliases` instead. When two repositories match equally well, resolution fails with an ambiguity error listing the candidates; pass `repo=<name>` or give the repositories distinct aliases.
+
 ## Branch Naming
 
 Branch names are derived from Jira issue data:
@@ -157,6 +161,8 @@ Branch names are derived from Jira issue data:
 - documentation labels/types -> `docs/<issue-key>-<summary>`
 - test/QA labels/types -> `test/<issue-key>-<summary>`
 - task/maintenance fallback -> `chore/<issue-key>-<summary>`
+
+Branch types are evaluated in the order above, and the first type that matches the issue on any of its labels, issue type, status, or priority wins. Urgency therefore outranks the issue type: a `Bug` labelled `hotfix` or `p1` becomes `hotfix/...`, not `bugfix/...`. A low-signal label can win the same way, so use an explicit label when a ticket's labels and issue type disagree.
 
 A Jira label can override the type:
 

@@ -31,9 +31,28 @@ DEFAULT_STATUS_COLUMN_MAP = {
     "Resolved": "Done",
 }
 DEFAULT_BLOCKED_COLUMN = "Blocked"
-DEFAULT_TOOL_PREFIXES = {
-    "github": ["github_create_pull_request", "create_pull_request", "github_pr_create"],
-    "bitbucket": ["bitbucket_create_pull_request", "create_pull_request", "bitbucket_pr_create"],
+# Directory this plugin writes work packets to, relative to the target repo.
+WORK_PACKET_DIR = ".hermes"
+# Repository match weights, banded so hint precedence is provable rather than accidental:
+#   max config bonus (15) < smallest gap between sources (20)
+#       -> config signals never outrank a hint, and no cross-source tie can occur
+#   best substring + bonus (115) < weakest exact (200)
+#       -> a fuzzy hint never hides an exact one
+#   gap between exact tiers (100) > max bonus
+#       -> an explicit repo argument always outranks a conflicting Jira label
+HINT_SOURCE_EXACT = {
+    "explicit": 600,
+    "jira_label": 500,
+    "jira_description": 400,
+    "jira_custom_field": 300,
+    "description": 200,
+}
+HINT_SOURCE_SUBSTRING = {
+    "explicit": 100,
+    "jira_label": 80,
+    "jira_description": 60,
+    "jira_custom_field": 40,
+    "description": 20,
 }
 ATLASSIAN_MCP_ACTIONS = {
     "search_issues": {
@@ -155,6 +174,14 @@ def slugify(value: str, max_length: int = 64) -> str:
     return (slug or "work")[:max_length].strip("-")
 
 
+def slug_contains_segment(haystack: str, needle: str) -> bool:
+    """Whole-segment containment: `api` matches `api-gateway` but not `rapid`."""
+
+    if not needle or not haystack:
+        return False
+    return re.search(rf"(?:^|-){re.escape(needle)}(?:-|$)", haystack) is not None
+
+
 def split_csv(value: Optional[str]) -> List[str]:
     if not value:
         return []
@@ -165,17 +192,34 @@ def expand_path(raw_path: str | Path) -> Path:
     return Path(str(raw_path)).expanduser().resolve()
 
 
+def required_arg(args: Dict[str, Any], name: str) -> str:
+    value = args.get(name)
+    if value is None or not str(value).strip():
+        raise WorkflowError(f"{name} is required.")
+    return str(value).strip()
+
+
+def safe_file_component(value: str, label: str) -> str:
+    """Guard a path segment built from Jira-supplied text against traversal."""
+
+    cleaned = str(value).strip()
+    if not cleaned or cleaned in {".", ".."} or set(cleaned) & {"/", "\\", "\0"}:
+        raise WorkflowError(f"{label} cannot be used as a file name: {value!r}")
+    return cleaned
+
+
 def json_result(payload: Dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True)
 
 
-def run_git(repo: Path, args: List[str], *, capture: bool = True, check: bool = True) -> str:
+def run_git(repo: Path, args: List[str], *, check: bool = True) -> str:
+    # Always capture: these handlers return JSON, so git must never write to stdout.
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
         text=True,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.PIPE if capture else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         check=False,
     )
     if check and result.returncode != 0:
@@ -270,7 +314,15 @@ def save_state(state: Dict[str, Any], path: Optional[Path] = None) -> Dict[str, 
     path = path or state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     state["updated_at"] = utc_now()
-    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    payload = json.dumps(state, indent=2, sort_keys=True) + "\n"
+    # Write through a temp file so an interrupted run cannot leave truncated JSON.
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp_path.write_text(payload, encoding="utf-8")
+        os.replace(tmp_path, path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return state
 
 
@@ -746,9 +798,10 @@ def kanban_column_for_issue(
     config = config or load_config()
     fallback_column = board_column_named(columns, fallback) or columns[0]
     status = issue_status_name(issue)
+    mapping = status_column_map(config)
     mapped_column = None
     for key in normalized_status_key(status):
-        mapped_column = status_column_map(config).get(key)
+        mapped_column = mapping.get(key)
         if mapped_column:
             break
     column = board_column_named(columns, mapped_column) or fallback_column
@@ -867,9 +920,11 @@ def discover_git_repositories(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     roots = config.get("roots") or [env("HERMES_DEVELOPMENT_ROOT", "~/Development")]
     for root in roots:
         root_path = expand_path(root)
-        if not root_path.exists():
+        try:
+            children = sorted(root_path.iterdir())
+        except OSError:  # missing or unreadable development root
             continue
-        for child in root_path.iterdir():
+        for child in children:
             if child.is_dir() and (child / ".git").exists():
                 repos.append({"name": child.name, "path": str(child)})
     return repos
@@ -881,40 +936,55 @@ def score_repo(repo: Dict[str, Any], issue: Dict[str, Any], hints: List[Dict[str
         return None
     path = expand_path(path_value)
     name = str(repo.get("name") or path.name)
-    aliases = normalize_values([name, path.name, *(repo.get("aliases") or [])])
+    raw_aliases = repo.get("aliases") or []
+    if isinstance(raw_aliases, str):
+        raw_aliases = [raw_aliases]
+    alias_values = [name, path.name, *raw_aliases]
+    aliases = normalize_values(alias_values)
+    alias_slugs = {slugify(value) for value in alias_values if value}
     score = 0
     reasons: List[str] = []
     source: Optional[str] = None
 
+    # Keep the best hint rather than the first that matches: a weak substring hit from a
+    # high-precedence hint must not hide an exact hit from a lower-precedence one.
     for hint in hints:
         hint_value = hint["value"]
-        hint_values = normalize_values([hint_value])
-        if aliases & hint_values:
-            score += 100 if hint["source"] == "jira_label" else 90
-            source = hint["source"]
-            reasons.append(f"{hint['source']} matched {hint_value}")
-            break
-        if slugify(hint_value) in slugify(name) or slugify(name) in slugify(hint_value):
-            score += 80
-            source = hint["source"]
-            reasons.append(f"{hint['source']} partially matched {hint_value}")
-            break
+        hint_source = hint["source"]
+        # slugify() falls back to "work" for punctuation-only input, which would match
+        # any repository whose name contains "work".
+        hint_slug = slugify(hint_value) if any(char.isalnum() for char in hint_value) else ""
+        if aliases & normalize_values([hint_value]):
+            points = HINT_SOURCE_EXACT.get(hint_source, HINT_SOURCE_EXACT["description"])
+            reason = f"{hint_source} matched {hint_value}"
+        elif any(
+            slug_contains_segment(alias_slug, hint_slug) or slug_contains_segment(hint_slug, alias_slug)
+            for alias_slug in alias_slugs
+        ):
+            points = HINT_SOURCE_SUBSTRING.get(hint_source, HINT_SOURCE_SUBSTRING["description"])
+            reason = f"{hint_source} partially matched {hint_value}"
+        else:
+            continue
+        if points > score:
+            score = points
+            source = hint_source
+            reasons = [reason]
 
     jira = repo.get("jira") or {}
     project_key = issue_project_key(issue)
     if project_key and project_key.casefold() in normalize_values(jira.get("projects")):
-        score += 20
+        score += 8
         reasons.append(f"project matched {project_key}")
-    label_overlap = issue_labels(issue) & normalize_values(jira.get("labels"))
-    if label_overlap:
-        score += 15 * len(label_overlap)
+    # Flat, not per-overlap: normalize_values stores both the raw and slugified form of a
+    # value, so counting overlaps double-counts anything containing punctuation.
+    if issue_labels(issue) & normalize_values(jira.get("labels")):
+        score += 4
         reasons.append("labels matched")
-    component_overlap = issue_components(issue) & normalize_values(jira.get("components"))
-    if component_overlap:
-        score += 15 * len(component_overlap)
+    if issue_components(issue) & normalize_values(jira.get("components")):
+        score += 2
         reasons.append("components matched")
-    if slugify(name) in slugify(issue_summary(issue)):
-        score += 3
+    if slug_contains_segment(slugify(issue_summary(issue)), slugify(name)):
+        score += 1
         reasons.append("repository name appeared in summary")
 
     if score <= 0:
@@ -949,8 +1019,13 @@ def resolve_repository(
             "or mention Repository: <name> in the Jira description."
         )
     if len(matches) > 1 and matches[0].score == matches[1].score:
-        names = ", ".join(f"{match.name} ({match.score})" for match in matches[:5])
-        raise WorkflowError(f"Repository match is ambiguous: {names}")
+        names = ", ".join(
+            f"{match.name} ({match.score}; {match.hint_source or 'config only'})" for match in matches[:5]
+        )
+        raise WorkflowError(
+            f"Repository match is ambiguous: {names}. Pass repo=<name>, add a "
+            "repo:<name> Jira label, or give the repositories distinct aliases."
+        )
     selected = matches[0]
     if not selected.path.exists():
         raise WorkflowError(f"Resolved repository path does not exist: {selected.path}")
@@ -992,10 +1067,12 @@ def find_item(state: Dict[str, Any], item_id: Optional[str] = None, jira_key: Op
     raise WorkflowError("Hermes Kanban item was not found.")
 
 
-def create_kanban_item(args: Dict[str, Any]) -> Dict[str, Any]:
-    ensure_board({})
-    config = load_config()
-    state = load_state()
+def build_kanban_item(args: Dict[str, Any], state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge one Jira issue into the in-memory board state and return the item.
+
+    Callers own loading and saving state so a batch import writes the file once.
+    """
+
     jira_issue = args.get("jira_issue") or {}
     key = args.get("jira_key") or issue_key(jira_issue)
     if not key:
@@ -1045,6 +1122,8 @@ def create_kanban_item(args: Dict[str, Any]) -> Dict[str, Any]:
     if existing:
         item["created_at"] = existing.get("created_at", item["created_at"])
         item["profile"] = item["profile"] or existing.get("profile")
+        if existing.get("profile_data") and item["profile"] == existing.get("profile"):
+            item["profile_data"] = existing["profile_data"]
         if not item["jira_status"]:
             item["jira_status"] = existing.get("jira_status", "")
         if not comments and existing.get("comments"):
@@ -1057,6 +1136,13 @@ def create_kanban_item(args: Dict[str, Any]) -> Dict[str, Any]:
     items = [old for old in state.get("items", []) if old.get("id") != item["id"]]
     items.append(item)
     state["items"] = items
+    return item
+
+
+def create_kanban_item(args: Dict[str, Any]) -> Dict[str, Any]:
+    config = load_config()
+    state = load_state()
+    item = build_kanban_item(args, state, config)
     save_state(state)
     return {"success": True, "item": item, "state_path": str(state_path())}
 
@@ -1097,11 +1183,12 @@ def sync_assigned_kanban_items(args: Dict[str, Any]) -> Dict[str, Any]:
     moved: List[Dict[str, str]] = []
     blocked: List[str] = []
     skipped: List[Dict[str, str]] = []
-    existing_state = load_state()
-    existing_keys = {item.get("jira_key") for item in existing_state.get("items", [])}
+    config = load_config()
+    state = load_state()
+    existing_keys = {item.get("jira_key") for item in state.get("items", [])}
     existing_statuses = {
         item.get("jira_key"): item.get("status")
-        for item in existing_state.get("items", [])
+        for item in state.get("items", [])
         if item.get("jira_key")
     }
 
@@ -1113,25 +1200,27 @@ def sync_assigned_kanban_items(args: Dict[str, Any]) -> Dict[str, Any]:
         if not assignee_matches(issue, assignee):
             skipped.append({"key": key, "reason": "assignee did not match"})
             continue
-        created_item = create_kanban_item(
+        synced_item = build_kanban_item(
             {
                 "jira_issue": issue,
-                "profile": args.get("profile") or env("HERMES_PROFILE", "default"),
+                "profile": args.get("profile") or env("HERMES_PROFILE"),
                 "automation_mode": args.get("automation_mode"),
-            }
-        )["item"]
+            },
+            state,
+            config,
+        )
         previous_status = existing_statuses.get(key)
-        if previous_status and previous_status != created_item.get("status"):
+        if previous_status and previous_status != synced_item.get("status"):
             moved.append(
                 {
                     "key": key,
                     "from": str(previous_status),
-                    "to": str(created_item.get("status")),
-                    "jira_status": str(created_item.get("jira_status") or ""),
+                    "to": str(synced_item.get("status")),
+                    "jira_status": str(synced_item.get("jira_status") or ""),
                 }
             )
-        existing_statuses[key] = created_item.get("status")
-        if created_item.get("blocked"):
+        existing_statuses[key] = synced_item.get("status")
+        if synced_item.get("blocked"):
             blocked.append(key)
         if key in existing_keys:
             updated.append(key)
@@ -1139,7 +1228,8 @@ def sync_assigned_kanban_items(args: Dict[str, Any]) -> Dict[str, Any]:
             created.append(key)
             existing_keys.add(key)
         if args.get("profile"):
-            assign_profile({"jira_key": key, "profile": args["profile"]})
+            apply_profile(state, synced_item, args["profile"], {})
+    save_state(state)
 
     return {
         "success": True,
@@ -1153,25 +1243,34 @@ def sync_assigned_kanban_items(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def assign_profile(args: Dict[str, Any]) -> Dict[str, Any]:
-    state = load_state()
-    profile_name = args.get("profile")
-    if not profile_name:
-        raise WorkflowError("profile is required.")
-    item = find_item(state, args.get("item_id"), args.get("jira_key"))
-    profile_data = args.get("profile_data") or {}
+def apply_profile(
+    state: Dict[str, Any],
+    item: Dict[str, Any],
+    profile_name: str,
+    profile_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Register the profile on the in-memory state and attach it to one item."""
+
     profiles = state.setdefault("profiles", {})
-    existing_profile = profiles.get(profile_name, {})
+    existing_profile = profiles.get(profile_name)
     if not isinstance(existing_profile, dict):
         existing_profile = {}
-    existing_profile.update(profile_data)
+    existing_profile.update(profile_data or {})
     existing_profile.setdefault("name", profile_name)
     profiles[profile_name] = existing_profile
     item["profile"] = profile_name
     item["profile_data"] = existing_profile
     item["updated_at"] = utc_now()
+    return existing_profile
+
+
+def assign_profile(args: Dict[str, Any]) -> Dict[str, Any]:
+    state = load_state()
+    profile_name = required_arg(args, "profile")
+    item = find_item(state, args.get("item_id"), args.get("jira_key"))
+    profile = apply_profile(state, item, profile_name, args.get("profile_data") or {})
     save_state(state)
-    return {"success": True, "item": item, "profile": existing_profile}
+    return {"success": True, "item": item, "profile": profile}
 
 
 def issue_from_args_or_item(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1232,8 +1331,16 @@ def find_repo_guidance(repo: Path) -> List[Path]:
     return [repo / name for name in names if (repo / name).exists()]
 
 
+def branch_exists(repo: Path, branch: str) -> bool:
+    """Exact local branch lookup; `git branch --list` would treat the name as a glob."""
+
+    return bool(run_git(repo, ["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], check=False))
+
+
 def ensure_clean_worktree(repo: Path, allow_dirty: bool) -> None:
-    status = run_git(repo, ["status", "--porcelain"])
+    # Work packets this plugin writes to .hermes/ must not count as user changes,
+    # otherwise the first start_branch blocks every later one in the same repo.
+    status = run_git(repo, ["status", "--porcelain", "--", ".", f":(exclude){WORK_PACKET_DIR}"])
     if status and not allow_dirty:
         raise WorkflowError(
             f"{repo} has uncommitted changes. Commit, stash, or rerun with allow_dirty=true."
@@ -1286,9 +1393,9 @@ def format_comment_context(comments: List[Dict[str, str]]) -> str:
 
 def create_work_packet(repo: Path, issue: Dict[str, Any], branch: str, profile_name: Optional[str]) -> Path:
     key = issue_key(issue, "JIRA")
-    packet_dir = repo / ".hermes" / "work"
+    packet_dir = repo / WORK_PACKET_DIR / "work"
     packet_dir.mkdir(parents=True, exist_ok=True)
-    packet = packet_dir / f"{key}.md"
+    packet = packet_dir / f"{safe_file_component(key, 'Jira key')}.md"
     guidance = find_repo_guidance(repo)
     guidance_lines = "\n".join(f"- {path.relative_to(repo)}" for path in guidance) or "- None found"
     dependencies = jira_dependencies(issue)
@@ -1340,11 +1447,10 @@ def start_branch(args: Dict[str, Any]) -> Dict[str, Any]:
     repo = match.path
     ensure_clean_worktree(repo, bool(args.get("allow_dirty")))
     branch = args.get("branch") or branch_name_for_issue(issue, config, args.get("branch_prefix"))
-    existing_branches = run_git(repo, ["branch", "--list", branch])
-    if existing_branches:
-        run_git(repo, ["checkout", branch], capture=False)
+    if branch_exists(repo, branch):
+        run_git(repo, ["checkout", branch])
     else:
-        run_git(repo, ["checkout", "-b", branch], capture=False)
+        run_git(repo, ["checkout", "-b", branch])
     packet = create_work_packet(repo, issue, branch, args.get("profile"))
     return {
         "success": True,
@@ -1359,16 +1465,16 @@ def commit_work(args: Dict[str, Any]) -> Dict[str, Any]:
     blocked = require_confirmation(args, "confirm_commit", "commit local changes")
     if blocked:
         return blocked
-    repo = expand_path(args["repo_path"])
+    repo = expand_path(required_arg(args, "repo_path"))
+    jira_key = required_arg(args, "jira_key")
     if args.get("stage_all"):
-        run_git(repo, ["add", "-A"], capture=False)
+        run_git(repo, ["add", "-A"])
     staged = run_git(repo, ["diff", "--cached", "--name-only"])
     if not staged:
         raise WorkflowError("No staged changes to commit. Stage files or pass stage_all=true.")
-    jira_key = args["jira_key"]
     summary = args.get("summary") or jira_key
     message = args.get("message") or f"{jira_key}: {summary}"
-    run_git(repo, ["commit", "-m", message], capture=False)
+    run_git(repo, ["commit", "-m", message])
     return {
         "success": True,
         "repository": str(repo),
@@ -1378,9 +1484,10 @@ def commit_work(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def parse_remote(remote_url: str) -> Dict[str, Optional[str]]:
+    # Repository names may contain dots, and remotes may carry a trailing slash.
     patterns = [
-        ("github", r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+)(?:\.git)?$"),
-        ("bitbucket", r"bitbucket\.org[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+)(?:\.git)?$"),
+        ("github", r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$"),
+        ("bitbucket", r"bitbucket\.org[:/](?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$"),
     ]
     for provider, pattern in patterns:
         match = re.search(pattern, remote_url)
@@ -1497,6 +1604,11 @@ def score_tool_for_action(tool_name: str, action: str, server_name: str) -> Dict
                 score += 5
             if "confluence" in tokens:
                 score -= 20
+            # Prefer the narrowest tool: getJiraIssue over getJiraIssueRemoteIssueLinks.
+            score -= len(tokens - set(pattern) - {"mcp", "jira", server_name.lower()})
+            # A genuine pattern match must stay a positive-score candidate even after the
+            # penalty, so a sole verbose tool is never dropped by discovery's score > 0 cutoff.
+            score = max(score, 1)
             if score > best_score:
                 best_score = score
                 best_pattern = pattern
@@ -1538,7 +1650,8 @@ def discover_atlassian_mcp_tools(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def provider_status() -> Dict[str, Any]:
+def provider_status(args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    del args
     try:
         discovery = discover_atlassian_mcp_tools({})
     except WorkflowError as exc:
@@ -1580,16 +1693,19 @@ Implements {jira_key}: {summary}
 
 
 def pr_plan(args: Dict[str, Any]) -> Dict[str, Any]:
-    repo = expand_path(args["repo_path"])
+    repo = expand_path(required_arg(args, "repo_path"))
+    jira_key = required_arg(args, "jira_key")
     remote_url = run_git(repo, ["remote", "get-url", "origin"])
     parsed = parse_remote(remote_url)
     provider = args.get("provider") or "auto"
     if provider == "auto":
         provider = parsed.get("provider")
     if provider not in {"github", "bitbucket"}:
-        raise WorkflowError("Could not infer provider. Pass provider=github or provider=bitbucket.")
+        raise WorkflowError(
+            f"Could not infer provider from remote {remote_url!r}. "
+            "Pass provider=github or provider=bitbucket."
+        )
 
-    jira_key = args["jira_key"]
     summary = args.get("summary") or jira_key
     branch = current_branch(repo)
     base = args.get("base") or env("HERMES_PR_BASE_BRANCH", "main")

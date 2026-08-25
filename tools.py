@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Callable, Dict
 
 try:
@@ -66,5 +65,5 @@ def pr_plan(args: Dict[str, Any], **kwargs) -> str:
 
 
 def provider_status(args: Dict[str, Any], **kwargs) -> str:
-    del args, kwargs
-    return json.dumps(workflow.provider_status(), indent=2, sort_keys=True)
+    del kwargs
+    return _wrap(workflow.provider_status, args)
